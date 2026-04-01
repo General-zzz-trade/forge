@@ -30,7 +30,7 @@ node scripts/recovery-audit.mjs
 
 What is solid now:
 
-- Bun-based CLI startup
+- self-contained npm launcher with Bun bundled as a dependency
 - generated SDK/settings artifacts
 - local launcher script
 - basic interactive startup
@@ -46,6 +46,25 @@ What is still partial:
   boundaries
 
 ## Quick start
+
+### npm install
+
+Published package name:
+
+```bash
+npm install -g forge-research-snapshot
+```
+
+Then run:
+
+```bash
+forge --version
+forge --help
+```
+
+The npm package now installs Bun automatically through the official `bun` npm
+package. You should not need to install Bun separately. If you want to override
+the runtime, set `BUN_BIN=/path/to/bun`.
 
 ### 1. Install dependencies
 

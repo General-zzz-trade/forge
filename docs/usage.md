@@ -4,6 +4,24 @@ This guide describes how to use the repository in its current real state.
 
 ## Start Forge
 
+### Install from npm
+
+```bash
+npm install -g forge-research-snapshot
+```
+
+Then use:
+
+```bash
+forge --version
+forge --help
+forge auth status
+```
+
+The npm package installs the `forge` launcher and bundles Bun through the
+official `bun` npm package. You should not need a separate Bun install. If you
+want to force a different runtime, set `BUN_BIN=/path/to/bun`.
+
 Preferred launcher:
 
 ```bash

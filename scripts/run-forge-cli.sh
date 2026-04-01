@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUN_BIN="${BUN_BIN:-$HOME/.bun/bin/bun}"
+BUN_BIN="${BUN_BIN:-$ROOT_DIR/node_modules/.bin/bun}"
+if [[ ! -x "$BUN_BIN" ]]; then
+  BUN_BIN="${HOME}/.bun/bin/bun"
+fi
 VERSION="${FORGE_VERSION:-$(node -p "require('$ROOT_DIR/package.json').version")}"
 BUILD_TIME="${FORGE_BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
