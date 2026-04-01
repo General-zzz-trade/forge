@@ -52,7 +52,7 @@ What is still partial:
 Published package name:
 
 ```bash
-npm install -g forge-research-snapshot
+npm install -g forge-coder
 ```
 
 Then run:

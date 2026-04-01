@@ -7,7 +7,7 @@ This guide describes how to use the repository in its current real state.
 ### Install from npm
 
 ```bash
-npm install -g forge-research-snapshot
+npm install -g forge-coder
 ```
 
 Then use:
