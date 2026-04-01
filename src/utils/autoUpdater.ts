@@ -1,4 +1,5 @@
 import axios from 'axios'
+import packageJson from '../../package.json'
 import { constants as fsConstants } from 'fs'
 import { access, writeFile } from 'fs/promises'
 import { homedir } from 'os'
@@ -29,6 +30,12 @@ import { jsonParse } from './slowOperations.js'
 
 const GCS_BUCKET_URL =
   'https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases'
+
+const OFFICIAL_MANAGED_PACKAGE_NAMES = new Set([
+  'forge',
+  '@anthropic-ai/claude-code',
+  '@anthropic-ai/claude-cli',
+])
 
 class AutoUpdaterError extends ClaudeError {}
 
@@ -67,17 +74,28 @@ export type MaxVersionConfig = {
  *
  * This approach keeps version comparison logic simple while maintaining traceability via the SHA.
  */
+export function shouldSkipManagedReleaseChecks(): boolean {
+  if (process.env.FORGE_SKIP_MIN_VERSION_CHECK === '1') {
+    return true
+  }
+
+  if (
+    MACRO.VERSION.endsWith('-local') ||
+    MACRO.VERSION.includes('+local') ||
+    MACRO.VERSION.startsWith('0.')
+  ) {
+    return true
+  }
+
+  return !OFFICIAL_MANAGED_PACKAGE_NAMES.has(packageJson.name)
+}
+
 export async function assertMinVersion(): Promise<void> {
   if (process.env.NODE_ENV === 'test') {
     return
   }
 
-  const isLocalRecoveryBuild =
-    MACRO.VERSION.endsWith('-local') ||
-    MACRO.VERSION.includes('+local') ||
-    process.env.FORGE_SKIP_MIN_VERSION_CHECK === '1'
-
-  if (isLocalRecoveryBuild) {
+  if (shouldSkipManagedReleaseChecks()) {
     return
   }
 

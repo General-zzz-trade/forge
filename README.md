@@ -1,92 +1,102 @@
 # Forge
 
-Forge is a locally recovered and reworked CLI fork built from a public source
-snapshot of Anthropic's Claude Code. This repository is not an official
-Anthropic project. In its current state, it is a runnable terminal coding
-assistant with a working CLI, REPL startup, non-interactive `--print` mode, and
-two authentication paths:
+Forge 是一个面向终端场景的本地编码助手，提供可运行的 CLI、交互式 REPL、非交互 `--print` 模式，以及基于 OpenAI/Codex 的登录复用能力。当前仓库已经可以完成安装、启动、登录校验和最小请求闭环，不再只是“能编译但不能用”的恢复版本。
 
-- existing first-party `claude.ai` style login, if present in local config
-- GPT/OpenAI login imported from official Codex CLI
+## 当前状态
 
-The repository has moved beyond "snapshot analysis only". The main product path
-now boots and can execute real requests.
-
-## Current status
-
-Verified locally:
+本地已验证：
 
 - `bash scripts/run-forge-cli.sh --version`
 - `bash scripts/run-forge-cli.sh --help`
 - `bash scripts/run-forge-cli.sh auth status`
 - `bash scripts/run-forge-cli.sh --print "Reply with the single word OK." --disable-slash-commands --tools "" --max-turns 1`
-- `bash scripts/run-forge-cli.sh auth login --openai` using Codex CLI login reuse
+- `bash scripts/run-forge-cli.sh auth login --openai`
+- `node scripts/recovery-audit.mjs`
 
-The recovery audit also passes:
+目前已经稳定的部分：
 
-```bash
-node scripts/recovery-audit.mjs
-```
+- npm 安装后可直接获得 `forge` 启动入口
+- Bun 运行时通过 npm 依赖自动安装
+- CLI、REPL、`--print` 路径可正常工作
+- 派生代码与设置结构可重新生成
+- OpenAI 登录可通过 Codex CLI 复用
 
-What is solid now:
+当前仍在继续完善的部分：
 
-- self-contained npm launcher with Bun bundled as a dependency
-- generated SDK/settings artifacts
-- local launcher script
-- basic interactive startup
-- non-interactive request path
-- Codex CLI based OpenAI login import
+- 原生 OpenAI 运行路径尚未覆盖所有工具调用与多轮场景
+- 如果本机只有受限的 OAuth 凭据，部分请求会退回 `codex exec` 兼容路径
+- 一些兼容层命名和历史模块边界仍待清理
 
-What is still partial:
+## 快速开始
 
-- the native OpenAI path is not feature-complete for all tool/multi-turn cases
-- if Codex only exposes a ChatGPT OAuth token without `api.responses.write`,
-  Forge falls back to `codex exec` for simple no-tool text requests
-- some historical Anthropic-specific integrations remain in compatibility
-  boundaries
+### 通过 npm 全局安装
 
-## Quick start
-
-### npm install
-
-Published package name:
+发布包名：
 
 ```bash
 npm install -g forge-coder
 ```
 
-Then run:
+安装后可直接执行：
 
 ```bash
 forge --version
 forge --help
+forge auth status
 ```
 
-The npm package now installs Bun automatically through the official `bun` npm
-package. You should not need to install Bun separately. If you want to override
-the runtime, set `BUN_BIN=/path/to/bun`.
-
-### 1. Install dependencies
+默认情况下不需要单独安装 Bun。如果你希望强制使用指定运行时，可以设置：
 
 ```bash
-bun install
+export BUN_BIN=/path/to/bun
 ```
 
-### 2. Generate derived files
+### 通过源码目录启动
+
+在仓库根目录执行：
 
 ```bash
-bun run generate
+npm install
+forge --version
+forge
 ```
 
-### 3. Start Forge
+如果当前终端还没有刷新 PATH，也可以先使用：
 
-Canonical launcher:
+```bash
+npx forge --version
+npx forge
+```
+
+`npm install` 会自动执行 `npm run setup:path`，尝试完成两件事：
+
+- 在 `~/.local/bin` 下创建 `forge` 启动包装器
+- 如果需要，将 `~/.local/bin` 写入当前 shell 的 PATH 配置
+
+如需手动重跑：
+
+```bash
+npm run setup:path
+```
+
+仓库脚本入口：
+
+```bash
+npm start
+npm run version
+npm run recovery:audit
+npm run preflight:openai
+```
+
+### 直接使用仓库启动脚本
+
+如果你需要最明确的开发态入口，可直接运行：
 
 ```bash
 bash scripts/run-forge-cli.sh
 ```
 
-Useful checks:
+常用检查命令：
 
 ```bash
 bash scripts/run-forge-cli.sh --version
@@ -94,106 +104,82 @@ bash scripts/run-forge-cli.sh --help
 bash scripts/run-forge-cli.sh auth status
 ```
 
-Non-interactive smoke test:
+最小非交互验证：
 
 ```bash
 bash scripts/run-forge-cli.sh --print "Reply with the single word OK." --disable-slash-commands --tools "" --max-turns 1
 ```
 
-You can also use package scripts:
+## 登录与认证
 
-```bash
-bun run cli
-bun run version
-bun run recovery:audit
-bun run preflight:openai
-```
+### 推荐方式：复用 Codex CLI 登录
 
-## Authentication
-
-### OpenAI / GPT via Codex CLI
-
-This is the preferred OpenAI path.
-
-1. Sign in with official Codex CLI:
+1. 先登录 Codex CLI：
 
 ```bash
 codex login
 codex login status
 ```
 
-2. Import that login into Forge:
+2. 将登录状态导入 Forge：
 
 ```bash
 bash scripts/run-forge-cli.sh auth login --openai
 ```
 
-3. Verify:
+3. 检查结果：
 
 ```bash
 bash scripts/run-forge-cli.sh auth status
 ```
 
-If the imported Codex credential includes a usable API key or Responses scope,
-Forge can use the native OpenAI runtime directly. If not, Forge still imports
-the login and can run simple no-tool text requests through a `codex exec`
-fallback.
+如果导入后的凭据具备可用的 API Key 或 Responses 能力，Forge 会直接走原生 OpenAI 路径；如果只有受限的会话凭据，Forge 仍可完成登录，并在简单文本请求场景下退回兼容执行路径。
 
-Detailed validation steps are in
-[docs/openai-oauth-smoke-test.md](/home/ubuntu/claude-code/docs/openai-oauth-smoke-test.md).
+详细验证流程见 [docs/openai-oauth-smoke-test.md](docs/openai-oauth-smoke-test.md)。
 
-### Existing first-party login
+### 兼容读取已有本地登录状态
 
-If your local config already contains the legacy first-party login state, Forge
-will continue to read it through the compatibility layer. This repository still
-contains that path for local continuity, but it is no longer the only way to
-start the product.
+如果你的本地配置目录里已经存在旧格式登录信息，Forge 仍会通过兼容层读取它。这条路径主要用于历史环境延续，不建议作为新环境的首选方式。
 
-## Architecture summary
+## 架构概览
 
-This codebase is still a large modular CLI monolith. The important top-level
-areas are:
+代码库目前仍以大型模块化 CLI 为主，几个核心入口如下：
 
-- [`src/entrypoints/cli.tsx`](/home/ubuntu/claude-code/src/entrypoints/cli.tsx): CLI entrypoint
-- [`src/main.tsx`](/home/ubuntu/claude-code/src/main.tsx): startup orchestration and mode routing
-- [`src/cli/print.ts`](/home/ubuntu/claude-code/src/cli/print.ts): non-interactive/headless execution
-- [`src/QueryEngine.ts`](/home/ubuntu/claude-code/src/QueryEngine.ts): query loop
-- [`src/services/api/claude.ts`](/home/ubuntu/claude-code/src/services/api/claude.ts): model dispatch
-- [`src/services/api/openai.ts`](/home/ubuntu/claude-code/src/services/api/openai.ts): native OpenAI path plus Codex fallback
-- [`src/tools.ts`](/home/ubuntu/claude-code/src/tools.ts): built-in tool registry
-- [`src/commands.ts`](/home/ubuntu/claude-code/src/commands.ts): command registry
+- `src/entrypoints/cli.tsx`：CLI 入口
+- `src/main.tsx`：启动编排与模式分发
+- `src/cli/print.ts`：非交互执行路径
+- `src/QueryEngine.ts`：主查询循环
+- `src/services/api/openai.ts`：OpenAI 请求与兼容分发
+- `src/tools.ts`：内置工具注册
+- `src/commands.ts`：命令注册
 
-High-level subsystem layout:
+按目录划分：
 
-- `src/commands/`: slash/CLI commands
-- `src/tools/`: tool implementations
-- `src/components/` and `src/screens/`: Ink UI
-- `src/services/`: API, auth, MCP, analytics, sync, compact
-- `src/utils/`: pathing, config, permissions, session storage, adapters
-- `src/bridge/`: IDE/remote bridge
-- `src/skills/` and `src/plugins/`: extensibility
+- `src/commands/`：命令与交互动作
+- `src/tools/`：工具实现
+- `src/components/`、`src/screens/`：终端界面
+- `src/services/`：API、认证、MCP、同步与分析能力
+- `src/utils/`：路径、配置、权限、存储与适配器
+- `src/bridge/`：桥接层
+- `src/skills/`、`src/plugins/`：扩展能力
 
-## Documentation map
+## 文档索引
 
-- [Usage guide](/home/ubuntu/claude-code/docs/usage.md)
-- [OpenAI OAuth smoke test](/home/ubuntu/claude-code/docs/openai-oauth-smoke-test.md)
-- [Recovery and evolution roadmap](/home/ubuntu/claude-code/docs/recovery-roadmap.md)
-- [Forge design note](/home/ubuntu/claude-code/docs/superpowers/specs/2026-04-01-forge-design.md)
+- [使用说明](docs/usage.md)
+- [OpenAI 登录冒烟测试](docs/openai-oauth-smoke-test.md)
+- [恢复与演进路线图](docs/recovery-roadmap.md)
+- [Forge 设计说明](docs/superpowers/specs/2026-04-01-forge-design.md)
 
-## Reality-based limitations
+## 现阶段限制
 
-- This repository was reconstructed from a public source snapshot and then
-  heavily adapted locally.
-- Some module names, compatibility layers, and internal abstractions still
-  reflect Claude/Anthropic heritage.
-- OpenAI support is now real, but not all advanced paths are native OpenAI yet.
-- A few features are best understood as "publicly runnable recovery build"
-  rather than polished release product.
+- 当前仓库是可运行版本，但还没有完全收敛成正式发行态
+- OpenAI 支持已可用，但高级工具场景仍在持续补齐
+- 部分兼容层仍服务于历史环境迁移，不代表最终形态
+- 自动更新链路已具备基础能力，但不同安装方式的体验仍有差异
 
-## Recommended next work
+## 建议的后续工作
 
-1. Expand OpenAI runtime coverage beyond simple no-tool requests.
-2. Reduce remaining Anthropic-specific compatibility naming in public surfaces.
-3. Tighten build metadata injection so `run-forge-cli.sh` is no longer the only
-   supported launcher.
-4. Add repeatable regression checks for REPL, `--print`, auth, and tool basics.
+1. 继续补齐 OpenAI 工具调用和多轮行为。
+2. 收敛兼容层命名，减少历史遗留暴露到公开表面。
+3. 进一步正式化构建产物元数据，降低对启动包装器的依赖。
+4. 增加可重复执行的 REPL、`--print`、登录、工具回归检查。
