@@ -118,9 +118,9 @@ type State = {
   lastAPIRequestMessages: BetaMessageStreamParams['messages'] | null
   // Last auto-mode classifier request(s) for /share transcript
   lastClassifierRequests: unknown[] | null
-  // CLAUDE.md content cached by context.ts for the auto-mode classifier.
+  // Instructions content cached by context.ts for the auto-mode classifier.
   // Breaks the yoloClassifier → claudemd → filesystem → permissions cycle.
-  cachedClaudeMdContent: string | null
+  cachedInstructionsContent: string | null
   // In-memory error log for recent errors
   inMemoryErrorLog: Array<{ error: string; timestamp: string }>
   // Session-only plugins from --plugin-dir flag
@@ -203,8 +203,8 @@ type State = {
   systemPromptSectionCache: Map<string, string | null>
   // Last date emitted to the model (for detecting midnight date changes)
   lastEmittedDate: string | null
-  // Additional directories from --add-dir flag (for CLAUDE.md loading)
-  additionalDirectoriesForClaudeMd: string[]
+  // Additional directories from --add-dir flag (for instructions loading)
+  additionalInstructionDirectories: string[]
   // Channel server allowlist from --channels flag (servers whose channel
   // notifications should register this session). Parsed once in main.tsx —
   // the tag decides trust model: 'plugin' → marketplace verification +
@@ -344,7 +344,7 @@ function getInitialState(): State {
     lastAPIRequestMessages: null,
     // Last auto-mode classifier request(s) for /share transcript
     lastClassifierRequests: null,
-    cachedClaudeMdContent: null,
+    cachedInstructionsContent: null,
     // In-memory error log for recent errors
     inMemoryErrorLog: [],
     // Session-only plugins from --plugin-dir flag
@@ -399,8 +399,8 @@ function getInitialState(): State {
     systemPromptSectionCache: new Map(),
     // Last date emitted to the model
     lastEmittedDate: null,
-    // Additional directories from --add-dir flag (for CLAUDE.md loading)
-    additionalDirectoriesForClaudeMd: [],
+    // Additional directories from --add-dir flag (for instructions loading)
+    additionalInstructionDirectories: [],
     // Channel server allowlist from --channels flag
     allowedChannels: [],
     hasDevChannels: false,
@@ -966,7 +966,7 @@ export function setMeter(
     description: 'Number of git commits created',
   })
   STATE.costCounter = createCounter('claude_code.cost.usage', {
-    description: 'Cost of the Claude Code session',
+    description: 'Cost of the Forge session',
     unit: 'USD',
   })
   STATE.tokenCounter = createCounter('claude_code.token.usage', {
@@ -1204,12 +1204,26 @@ export function getLastClassifierRequests(): unknown[] | null {
   return STATE.lastClassifierRequests
 }
 
-export function setCachedClaudeMdContent(content: string | null): void {
-  STATE.cachedClaudeMdContent = content
+export function setCachedInstructionsContent(content: string | null): void {
+  STATE.cachedInstructionsContent = content
 }
 
+export function getCachedInstructionsContent(): string | null {
+  return STATE.cachedInstructionsContent
+}
+
+/**
+ * @deprecated Use setCachedInstructionsContent.
+ */
+export function setCachedClaudeMdContent(content: string | null): void {
+  setCachedInstructionsContent(content)
+}
+
+/**
+ * @deprecated Use getCachedInstructionsContent.
+ */
 export function getCachedClaudeMdContent(): string | null {
-  return STATE.cachedClaudeMdContent
+  return getCachedInstructionsContent()
 }
 
 export function addToInMemoryErrorLog(errorInfo: {
@@ -1663,14 +1677,30 @@ export function setLastEmittedDate(date: string | null): void {
   STATE.lastEmittedDate = date
 }
 
-export function getAdditionalDirectoriesForClaudeMd(): string[] {
-  return STATE.additionalDirectoriesForClaudeMd
+export function getAdditionalInstructionDirectories(): string[] {
+  return STATE.additionalInstructionDirectories
 }
 
+export function setAdditionalInstructionDirectories(
+  directories: string[],
+): void {
+  STATE.additionalInstructionDirectories = directories
+}
+
+/**
+ * @deprecated Use getAdditionalInstructionDirectories.
+ */
+export function getAdditionalDirectoriesForClaudeMd(): string[] {
+  return getAdditionalInstructionDirectories()
+}
+
+/**
+ * @deprecated Use setAdditionalInstructionDirectories.
+ */
 export function setAdditionalDirectoriesForClaudeMd(
   directories: string[],
 ): void {
-  STATE.additionalDirectoriesForClaudeMd = directories
+  setAdditionalInstructionDirectories(directories)
 }
 
 export function getAllowedChannels(): ChannelEntry[] {
@@ -1755,4 +1785,3 @@ export function getPromptId(): string | null {
 export function setPromptId(id: string | null): void {
   STATE.promptId = id
 }
-

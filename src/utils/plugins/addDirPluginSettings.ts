@@ -8,7 +8,8 @@
 
 import { join } from 'path'
 import type { z } from 'zod/v4'
-import { getAdditionalDirectoriesForClaudeMd } from '../../bootstrap/state.js'
+import { getAdditionalInstructionDirectories } from '../../bootstrap/state.js'
+import { getPreferredRelativeProjectSettingsFilePath } from '../forgePaths.js'
 import { parseSettingsFile } from '../settings/settings.js'
 import type {
   ExtraKnownMarketplaceSchema,
@@ -20,6 +21,19 @@ type ExtraKnownMarketplace = z.infer<
 >
 
 const SETTINGS_FILES = ['settings.json', 'settings.local.json'] as const
+
+function getAdditionalDirectorySettingsPath(
+  dir: string,
+  file: (typeof SETTINGS_FILES)[number],
+): string {
+  return join(
+    dir,
+    getPreferredRelativeProjectSettingsFilePath(
+      file === 'settings.json' ? 'projectSettings' : 'localSettings',
+      dir,
+    ),
+  )
+}
 
 /**
  * Returns a merged record of enabledPlugins from all --add-dir directories.
@@ -35,9 +49,11 @@ export function getAddDirEnabledPlugins(): NonNullable<
   SettingsJson['enabledPlugins']
 > {
   const result: NonNullable<SettingsJson['enabledPlugins']> = {}
-  for (const dir of getAdditionalDirectoriesForClaudeMd()) {
+  for (const dir of getAdditionalInstructionDirectories()) {
     for (const file of SETTINGS_FILES) {
-      const { settings } = parseSettingsFile(join(dir, '.claude', file))
+      const { settings } = parseSettingsFile(
+        getAdditionalDirectorySettingsPath(dir, file),
+      )
       if (!settings?.enabledPlugins) {
         continue
       }
@@ -58,9 +74,11 @@ export function getAddDirExtraMarketplaces(): Record<
   ExtraKnownMarketplace
 > {
   const result: Record<string, ExtraKnownMarketplace> = {}
-  for (const dir of getAdditionalDirectoriesForClaudeMd()) {
+  for (const dir of getAdditionalInstructionDirectories()) {
     for (const file of SETTINGS_FILES) {
-      const { settings } = parseSettingsFile(join(dir, '.claude', file))
+      const { settings } = parseSettingsFile(
+        getAdditionalDirectorySettingsPath(dir, file),
+      )
       if (!settings?.extraKnownMarketplaces) {
         continue
       }

@@ -19,7 +19,6 @@ import { unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
-  getOauthConfig,
   OAUTH_BETA_HEADER,
 } from '../../constants/oauth.js'
 import {
@@ -41,6 +40,12 @@ import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getRetryDelay } from '../api/withRetry.js'
+import {
+  getActiveForgeSession,
+  isUsingBrokeredForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from '../auth/runtime.js'
 import {
   type PolicyLimitsFetchResult,
   type PolicyLimitsResponse,
@@ -124,7 +129,7 @@ function getCachePath(): string {
  * Get the policy limits API endpoint
  */
 function getPolicyLimitsEndpoint(): string {
-  return `${getOauthConfig().BASE_API_URL}/api/claude_code/policy_limits`
+  return `${requireAuthenticatedApiBaseUrl()}/api/claude_code/policy_limits`
 }
 
 /**
@@ -168,6 +173,14 @@ export function isPolicyLimitsEligible(): boolean {
   // 3p provider users should not hit the policy limits endpoint
   if (getAPIProvider() !== 'firstParty') {
     return false
+  }
+
+  if (isUsingNativeOpenAISession()) {
+    return false
+  }
+
+  if (isUsingBrokeredForgeSession()) {
+    return true
   }
 
   // Custom base URL users should not hit the policy limits endpoint
@@ -228,6 +241,25 @@ function getAuthHeaders(): {
   headers: Record<string, string>
   error?: string
 } {
+  if (isUsingNativeOpenAISession()) {
+    return {
+      headers: {},
+      error:
+        'Native OpenAI sessions do not use Forge or Anthropic policy limit endpoints.',
+    }
+  }
+
+  const forgeSession = isUsingBrokeredForgeSession()
+    ? getActiveForgeSession()
+    : null
+  if (forgeSession?.accessToken) {
+    return {
+      headers: {
+        Authorization: `Bearer ${forgeSession.accessToken}`,
+      },
+    }
+  }
+
   // Try API key first (for Console users)
   try {
     const { key: apiKey } = getAnthropicApiKeyWithSource({
@@ -301,7 +333,9 @@ async function fetchPolicyLimits(
   cachedChecksum?: string,
 ): Promise<PolicyLimitsFetchResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const authHeaders = getAuthHeaders()
     if (authHeaders.error) {

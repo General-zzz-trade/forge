@@ -5,6 +5,11 @@
 import axios from 'axios'
 import { OAUTH_BETA_HEADER } from '../constants/oauth.js'
 import {
+  getActiveForgeSession,
+  isUsingForgeSession,
+  isUsingNativeOpenAISession,
+} from '../services/auth/runtime.js'
+import {
   getAnthropicApiKey,
   getClaudeAIOAuthTokens,
   handleOAuth401Error,
@@ -67,6 +72,22 @@ export type AuthHeaders = {
  * Returns either OAuth headers for Max/Pro users or API key headers for regular users
  */
 export function getAuthHeaders(): AuthHeaders {
+  const forgeSession = getActiveForgeSession()
+  if (forgeSession?.accessToken) {
+    if (forgeSession.issuer === 'openai') {
+      return {
+        headers: {},
+        error:
+          'Native OpenAI sessions cannot be used with Forge or Anthropic first-party API endpoints.',
+      }
+    }
+    return {
+      headers: {
+        Authorization: `Bearer ${forgeSession.accessToken}`,
+      },
+    }
+  }
+
   if (isClaudeAISubscriber()) {
     const oauthTokens = getClaudeAIOAuthTokens()
     if (!oauthTokens?.accessToken) {
@@ -120,6 +141,7 @@ export async function withOAuth401Retry<T>(
     return await request()
   } catch (err) {
     if (!axios.isAxiosError(err)) throw err
+    if (isUsingForgeSession() || isUsingNativeOpenAISession()) throw err
     const status = err.response?.status
     const isAuthError =
       status === 401 ||

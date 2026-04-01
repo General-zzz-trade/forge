@@ -1,16 +1,59 @@
+import { existsSync, readdirSync } from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import { join } from 'path'
 
-// Memoized: 150+ callers, many on hot paths. Keyed off CLAUDE_CONFIG_DIR so
-// tests that change the env var get a fresh value without explicit cache.clear.
+export const FORGE_CONFIG_DIR_ENV = 'FORGE_CONFIG_DIR'
+export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR'
+
+export function getDefaultForgeConfigHomeDir(): string {
+  return join(homedir(), '.forge').normalize('NFC')
+}
+
+export function getLegacyClaudeConfigHomeDir(): string {
+  return join(homedir(), '.claude').normalize('NFC')
+}
+
+function hasDirectoryEntries(path: string): boolean {
+  try {
+    return readdirSync(path).length > 0
+  } catch {
+    return false
+  }
+}
+
+function resolveConfigHomeDir(): string {
+  const explicitConfigDir =
+    process.env[FORGE_CONFIG_DIR_ENV] ?? process.env[CLAUDE_CONFIG_DIR_ENV]
+  if (explicitConfigDir) {
+    return explicitConfigDir.normalize('NFC')
+  }
+
+  const forgeConfigDir = getDefaultForgeConfigHomeDir()
+  const legacyConfigDir = getLegacyClaudeConfigHomeDir()
+  const forgeExists = existsSync(forgeConfigDir)
+  const legacyExists = existsSync(legacyConfigDir)
+
+  if (forgeExists && (!legacyExists || hasDirectoryEntries(forgeConfigDir))) {
+    return forgeConfigDir
+  }
+  if (legacyExists) {
+    return legacyConfigDir
+  }
+  return forgeConfigDir
+}
+
+export function isUsingDefaultConfigHomeDir(): boolean {
+  return !process.env[FORGE_CONFIG_DIR_ENV] && !process.env[CLAUDE_CONFIG_DIR_ENV]
+}
+
+// Memoized: 150+ callers, many on hot paths. Keyed off the explicit config-dir
+// env vars so tests that change them get a fresh value without cache.clear().
+// Filesystem fallback (~/.forge vs ~/.claude) is expected to be process-stable.
 export const getClaudeConfigHomeDir = memoize(
-  (): string => {
-    return (
-      process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
-    ).normalize('NFC')
-  },
-  () => process.env.CLAUDE_CONFIG_DIR,
+  (): string => resolveConfigHomeDir(),
+  () =>
+    `${process.env[FORGE_CONFIG_DIR_ENV] ?? ''}\0${process.env[CLAUDE_CONFIG_DIR_ENV] ?? ''}`,
 )
 
 export function getTeamsDir(): string {
@@ -123,7 +166,7 @@ export function isRunningOnHomespace(): boolean {
 }
 
 /**
- * Conservative check for whether Claude Code is running inside a protected
+ * Conservative check for whether Forge is running inside a protected
  * (privileged or ASL3+) COO namespace or cluster.
  *
  * Conservative means: when signals are ambiguous, assume protected. We would

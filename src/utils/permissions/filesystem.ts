@@ -9,7 +9,11 @@ import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   CLAUDE_FOLDER_PERMISSION_PATTERN,
   FILE_EDIT_TOOL_NAME,
+  FORGE_FOLDER_PERMISSION_PATTERN,
   GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+  GLOBAL_FORGE_FOLDER_PERMISSION_PATTERN,
+  LEGACY_CLAUDE_FOLDER_PERMISSION_PATTERN,
+  LEGACY_GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
 } from 'src/tools/FileEditTool/constants.js'
 import type { z } from 'zod/v4'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
@@ -17,11 +21,19 @@ import { checkStatsigFeatureGate_CACHED_MAY_BE_STALE } from '../../services/anal
 import type { AnyObject, Tool, ToolPermissionContext } from '../../Tool.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { getCwd } from '../cwd.js'
-import { getClaudeConfigHomeDir } from '../envUtils.js'
+import {
+  getClaudeConfigHomeDir,
+  getLegacyClaudeConfigHomeDir,
+} from '../envUtils.js'
 import {
   getFsImplementation,
   getPathsForPermissionCheck,
 } from '../fsOperations.js'
+import {
+  FORGE_PROJECT_CONFIG_DIRNAME,
+  LEGACY_CLAUDE_PROJECT_CONFIG_DIRNAME,
+  getProjectConfigDirCandidates,
+} from '../forgePaths.js'
 import {
   containsPathTraversal,
   expandPath,
@@ -64,6 +76,7 @@ export const DANGEROUS_FILES = [
   '.profile',
   '.ripgreprc',
   '.mcp.json',
+  '.forge.json',
   '.claude.json',
 ] as const
 
@@ -75,6 +88,7 @@ export const DANGEROUS_DIRECTORIES = [
   '.git',
   '.vscode',
   '.idea',
+  '.forge',
   '.claude',
 ] as const
 
@@ -92,27 +106,34 @@ export function normalizeCaseForComparison(path: string): string {
 }
 
 /**
- * If filePath is inside a .claude/skills/{name}/ directory (project or global),
- * return the skill name and a session-allow pattern scoped to just that skill.
- * Used to offer a narrower "allow edits to this skill only" option in the
- * permission dialog and SDK suggestions, so iterating on one skill doesn't
- * require granting session access to all of .claude/ (settings.json, hooks/, etc.).
+ * If filePath is inside a .forge/skills/{name}/ directory (project or global),
+ * with legacy .claude/skills/{name}/ fallback, return the skill name and a
+ * session-allow pattern scoped to just that skill. Used to offer a narrower
+ * "allow edits to this skill only" option in the permission dialog and SDK
+ * suggestions, so iterating on one skill doesn't require granting session
+ * access to the entire config directory (settings.json, hooks/, etc.).
  */
-export function getClaudeSkillScope(
+export function getConfigSkillScope(
   filePath: string,
 ): { skillName: string; pattern: string } | null {
   const absolutePath = expandPath(filePath)
   const absolutePathLower = normalizeCaseForComparison(absolutePath)
 
   const bases = [
-    {
-      dir: expandPath(join(getOriginalCwd(), '.claude', 'skills')),
-      prefix: '/.claude/skills/',
-    },
-    {
-      dir: expandPath(join(homedir(), '.claude', 'skills')),
-      prefix: '~/.claude/skills/',
-    },
+    ...getProjectConfigDirCandidates(getOriginalCwd()).map(dir => ({
+      dir: expandPath(join(dir, 'skills')),
+      prefix: dir.endsWith(FORGE_PROJECT_CONFIG_DIRNAME)
+        ? '/.forge/skills/'
+        : '/.claude/skills/',
+    })),
+    ...Array.from(
+      new Set([getClaudeConfigHomeDir(), getLegacyClaudeConfigHomeDir()]),
+    ).map(dir => ({
+      dir: expandPath(join(dir, 'skills')),
+      prefix: dir === getClaudeConfigHomeDir() && !dir.endsWith('.claude')
+        ? '~/.forge/skills/'
+        : '~/.claude/skills/',
+    })),
   ]
 
   for (const { dir, prefix } of bases) {
@@ -145,7 +166,8 @@ export function getClaudeSkillScope(
         // Reject glob metacharacters. skillName is interpolated into a
         // gitignore pattern consumed by ignore().add() in matchingRuleForInput
         // at step 1.6. A directory literally named '*' (valid on POSIX) would
-        // produce '/.claude/skills/*/**' which matches ALL skills. Return null
+        // produce '/.forge/skills/*/**' (or legacy '/.claude/skills/*/**'),
+        // which matches ALL skills. Return null
         // to fall through to generateSuggestions() instead.
         if (/[*?[\]]/.test(skillName)) return null
         return { skillName, pattern: prefix + skillName + '/**' }
@@ -155,6 +177,9 @@ export function getClaudeSkillScope(
 
   return null
 }
+
+/** @deprecated Use getConfigSkillScope() instead. */
+export const getClaudeSkillScope = getConfigSkillScope
 
 // Always use / as the path separator per gitignore spec
 // https://git-scm.com/docs/gitignore
@@ -197,9 +222,9 @@ function getSettingsPaths(): string[] {
   ).filter(path => path !== undefined)
 }
 
-export function isClaudeSettingsPath(filePath: string): boolean {
+export function isForgeSettingsPath(filePath: string): boolean {
   // SECURITY: Normalize path structure first to prevent bypass via redundant ./
-  // sequences like `./.claude/./settings.json` which would evade the endsWith() check
+  // sequences like `./.forge/./settings.json` which would evade the endsWith() check
   const expandedPath = expandPath(filePath)
 
   // Normalize for case-insensitive comparison to prevent bypassing security
@@ -208,10 +233,16 @@ export function isClaudeSettingsPath(filePath: string): boolean {
 
   // Use platform separator so endsWith checks work on both Unix (/) and Windows (\)
   if (
-    normalizedPath.endsWith(`${sep}.claude${sep}settings.json`) ||
-    normalizedPath.endsWith(`${sep}.claude${sep}settings.local.json`)
+    [
+      `${sep}.forge${sep}settings.json`,
+      `${sep}.forge${sep}settings.local.json`,
+      `${sep}.claude${sep}settings.json`,
+      `${sep}.claude${sep}settings.local.json`,
+    ].some(suffix =>
+      normalizedPath.endsWith(normalizeCaseForComparison(suffix)),
+    )
   ) {
-    // Include .claude/settings.json even for other projects
+    // Include .forge/settings.json and legacy .claude/settings.json even for other projects
     return true
   }
   // Check for current project's settings files (including managed settings and CLI args)
@@ -221,24 +252,36 @@ export function isClaudeSettingsPath(filePath: string): boolean {
   )
 }
 
-// Always ask when Claude Code tries to edit its own config files
-function isClaudeConfigFilePath(filePath: string): boolean {
-  if (isClaudeSettingsPath(filePath)) {
+/** @deprecated Use isForgeSettingsPath() instead. */
+export function isClaudeSettingsPath(filePath: string): boolean {
+  return isForgeSettingsPath(filePath)
+}
+
+// Always ask when Forge tries to edit its own config files
+function isForgeConfigFilePath(filePath: string): boolean {
+  if (isForgeSettingsPath(filePath)) {
     return true
   }
 
-  // Check if file is within .claude/commands or .claude/agents directories
+  // Check if file is within .forge/commands or .forge/agents directories,
+  // with legacy .claude/ fallback
   // using proper path segment validation (not string matching with includes())
   // pathInWorkingPath now handles case-insensitive comparison to prevent bypasses
-  const commandsDir = join(getOriginalCwd(), '.claude', 'commands')
-  const agentsDir = join(getOriginalCwd(), '.claude', 'agents')
-  const skillsDir = join(getOriginalCwd(), '.claude', 'skills')
+  return getProjectConfigDirCandidates(getOriginalCwd()).some(configDir => {
+    const commandsDir = join(configDir, 'commands')
+    const agentsDir = join(configDir, 'agents')
+    const skillsDir = join(configDir, 'skills')
+    return (
+      pathInWorkingPath(filePath, commandsDir) ||
+      pathInWorkingPath(filePath, agentsDir) ||
+      pathInWorkingPath(filePath, skillsDir)
+    )
+  })
+}
 
-  return (
-    pathInWorkingPath(filePath, commandsDir) ||
-    pathInWorkingPath(filePath, agentsDir) ||
-    pathInWorkingPath(filePath, skillsDir)
-  )
+/** @deprecated Use isForgeConfigFilePath() instead. */
+export function isClaudeConfigFilePath(filePath: string): boolean {
+  return isForgeConfigFilePath(filePath)
 }
 
 // Check if file is the plan file for the current session
@@ -279,7 +322,7 @@ function isSessionMemoryPath(absolutePath: string): boolean {
 
 /**
  * Check if file is within the current project's directory.
- * Path format: ~/.claude/projects/{sanitized-cwd}/...
+ * Path format: ~/.forge/projects/{sanitized-cwd}/... with legacy ~/.claude/
  */
 function isProjectDirPath(absolutePath: string): boolean {
   const projectDir = getProjectDir(getCwd())
@@ -319,7 +362,7 @@ export function getClaudeTempDirName(): string {
  * Uses TMPDIR env var if set, otherwise:
  * - On Unix: /tmp/claude-{uid}/ (resolved to /private/tmp/claude-{uid}/ on macOS)
  * - On Windows: {tmpdir}/claude/ (e.g., C:\Users\{user}\AppData\Local\Temp\claude\)
- * This is a per-user temporary directory used by Claude Code for all temp files.
+ * This is a per-user temporary directory used by Forge for all temp files.
  *
  * NOTE: We resolve symlinks to ensure this path matches the resolved paths used
  * in permission checks. On macOS, /tmp is a symlink to /private/tmp, so without
@@ -453,17 +496,18 @@ function isDangerousFilePathToAutoEdit(path: string): boolean {
         continue
       }
 
-      // Special case: .claude/worktrees/ is a structural path (where Claude stores
-      // git worktrees), not a user-created dangerous directory. Skip the .claude
-      // segment when it's followed by 'worktrees'. Any nested .claude directories
-      // within the worktree (not followed by 'worktrees') are still blocked.
-      if (dir === '.claude') {
+      // Special case: .forge/worktrees/ (and legacy .claude/worktrees/) is a
+      // structural path where Forge stores git worktrees, not a user-created
+      // dangerous directory. Skip the config-dir segment when it's followed by
+      // 'worktrees'. Any nested .forge/.claude directories within the worktree
+      // (not followed by 'worktrees') are still blocked.
+      if (dir === '.claude' || dir === '.forge') {
         const nextSegment = pathSegments[i + 1]
         if (
           nextSegment &&
           normalizeCaseForComparison(nextSegment) === 'worktrees'
         ) {
-          break // Skip this .claude, continue checking other segments
+          break // Skip this config-dir segment, continue checking other segments
         }
       }
 
@@ -607,8 +651,8 @@ function hasSuspiciousWindowsPathPattern(path: string): boolean {
  *
  * This function performs comprehensive safety checks including:
  * - Suspicious Windows path patterns (NTFS streams, 8.3 names, long path prefixes, etc.)
- * - Claude config files (.claude/settings.json, .claude/commands/, .claude/agents/)
- * - MCP CLI state files (managed internally by Claude Code)
+ * - Forge config files (.forge/settings.json, .forge/commands/, .forge/agents/, plus legacy .claude/)
+ * - MCP CLI state files (managed internally by Forge)
  * - Dangerous files (.bashrc, .gitconfig, .git/, .vscode/, .idea/, etc.)
  *
  * IMPORTANT: This function checks BOTH the original path AND resolved symlink paths
@@ -632,18 +676,18 @@ export function checkPathSafetyForAutoEdit(
     if (hasSuspiciousWindowsPathPattern(pathToCheck)) {
       return {
         safe: false,
-        message: `Claude requested permissions to write to ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
+        message: `Forge requested permissions to write to ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
         classifierApprovable: false,
       }
     }
   }
 
-  // Check for Claude config files on all paths
+  // Check for Forge config files on all paths
   for (const pathToCheck of pathsToCheck) {
-    if (isClaudeConfigFilePath(pathToCheck)) {
+    if (isForgeConfigFilePath(pathToCheck)) {
       return {
         safe: false,
-        message: `Claude requested permissions to write to ${path}, but you haven't granted it yet.`,
+        message: `Forge requested permissions to write to ${path}, but you haven't granted it yet.`,
         classifierApprovable: true,
       }
     }
@@ -654,7 +698,7 @@ export function checkPathSafetyForAutoEdit(
     if (isDangerousFilePathToAutoEdit(pathToCheck)) {
       return {
         safe: false,
-        message: `Claude requested permissions to edit ${path} which is a sensitive file.`,
+        message: `Forge requested permissions to edit ${path} which is a sensitive file.`,
         classifierApprovable: true,
       }
     }
@@ -897,7 +941,7 @@ function patternWithRoot(
       root: homedir().normalize('NFC'),
     }
   } else if (pattern.startsWith(DIR_SEP)) {
-    // Patterns starting with / resolve relative to the directory where settings are stored (without .claude/)
+    // Patterns starting with / resolve relative to the directory where settings are stored (without the config-dir suffix)
     return {
       relativePattern: pattern,
       root: rootPathForSource(source),
@@ -1035,7 +1079,7 @@ export function checkReadPermissionForTool(
   if (typeof tool.getPath !== 'function') {
     return {
       behavior: 'ask',
-      message: `Claude requested permissions to use ${tool.name}, but you haven't granted it yet.`,
+      message: `Forge requested permissions to use ${tool.name}, but you haven't granted it yet.`,
     }
   }
   const path = tool.getPath(input)
@@ -1054,7 +1098,7 @@ export function checkReadPermissionForTool(
     if (pathToCheck.startsWith('\\\\') || pathToCheck.startsWith('//')) {
       return {
         behavior: 'ask',
-        message: `Claude requested permissions to read from ${path}, which appears to be a UNC path that could access network resources.`,
+        message: `Forge requested permissions to read from ${path}, which appears to be a UNC path that could access network resources.`,
         decisionReason: {
           type: 'other',
           reason: 'UNC path detected (defense-in-depth check)',
@@ -1068,7 +1112,7 @@ export function checkReadPermissionForTool(
     if (hasSuspiciousWindowsPathPattern(pathToCheck)) {
       return {
         behavior: 'ask',
-        message: `Claude requested permissions to read from ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
+        message: `Forge requested permissions to read from ${path}, which contains a suspicious Windows path pattern that requires manual approval.`,
         decisionReason: {
           type: 'other',
           reason:
@@ -1112,7 +1156,7 @@ export function checkReadPermissionForTool(
     if (askRule) {
       return {
         behavior: 'ask',
-        message: `Claude requested permissions to read from ${path}, but you haven't granted it yet.`,
+        message: `Forge requested permissions to read from ${path}, but you haven't granted it yet.`,
         decisionReason: {
           type: 'rule',
           rule: askRule,
@@ -1179,7 +1223,7 @@ export function checkReadPermissionForTool(
   // At this point, isInWorkingDir is false (from step #6), so path is outside working directories
   return {
     behavior: 'ask',
-    message: `Claude requested permissions to read from ${path}, but you haven't granted it yet.`,
+    message: `Forge requested permissions to read from ${path}, but you haven't granted it yet.`,
     suggestions: generateSuggestions(
       path,
       'read',
@@ -1211,7 +1255,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   if (typeof tool.getPath !== 'function') {
     return {
       behavior: 'ask',
-      message: `Claude requested permissions to use ${tool.name}, but you haven't granted it yet.`,
+      message: `Forge requested permissions to use ${tool.name}, but you haven't granted it yet.`,
     }
   }
   const path = tool.getPath(input)
@@ -1239,7 +1283,8 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   }
 
   // 1.5. Allow writes to internal editable paths (plan files, scratchpad)
-  // This MUST come before isDangerousFilePathToAutoEdit check since .claude is a dangerous directory
+  // This MUST come before isDangerousFilePathToAutoEdit check since the config
+  // directory (.forge with legacy .claude fallback) is dangerous.
   const absolutePathForEdit = expandPath(path)
   const internalEditResult = checkEditableInternalPath(
     absolutePathForEdit,
@@ -1249,16 +1294,17 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     return internalEditResult
   }
 
-  // 1.6. Check for .claude/** allow rules BEFORE safety checks
-  // This allows session-level permissions to bypass the safety blocks for .claude/
+  // 1.6. Check for config-directory allow rules BEFORE safety checks.
+  // This allows session-level permissions to bypass the safety blocks for
+  // .forge/ and legacy .claude/
   // We only allow this for session-level rules to prevent users from accidentally
-  // permanently granting broad access to their .claude/ folder.
+  // permanently granting broad access to their config folder.
   //
   // matchingRuleForInput returns the first match across all sources. If the user
-  // also has a broader Edit(.claude) rule in userSettings (e.g. from sandbox
+  // also has a broader Edit(.forge) or legacy Edit(.claude) rule in userSettings (e.g. from sandbox
   // write-allow conversion), that rule would be found first and its source check
   // below would fail. Scope the search to session-only rules so the dialog's
-  // "allow Claude to edit its own settings for this session" option actually works.
+  // "allow Forge to edit its own settings for this session" option actually works.
   const claudeFolderAllowRule = matchingRuleForInput(
     path,
     {
@@ -1271,20 +1317,25 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     'allow',
   )
   if (claudeFolderAllowRule) {
-    // Check if this rule is scoped under .claude/ (project or global).
-    // Accepts both the broad patterns ('/.claude/**', '~/.claude/**') and
-    // narrowed ones like '/.claude/skills/my-skill/**' so users can grant
+    // Check if this rule is scoped under the config directory (project or global).
+    // Accepts both the broad patterns ('/.forge/**', '~/.forge/**', plus legacy
+    // .claude variants) and narrowed ones like '/.forge/skills/my-skill/**' so users can grant
     // session access to a single skill without also exposing settings.json
     // or hooks/. The rule already matched the path via matchingRuleForInput;
     // this is an additional scope check. Reject '..' to prevent a rule like
-    // '/.claude/../**' from leaking this bypass outside .claude/.
+    // '/.forge/../**' or legacy '/.claude/../**' from leaking this bypass
+    // outside the config directory.
     const ruleContent = claudeFolderAllowRule.ruleValue.ruleContent
     if (
       ruleContent &&
-      (ruleContent.startsWith(CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2)) ||
-        ruleContent.startsWith(
-          GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN.slice(0, -2),
-        )) &&
+      [
+        FORGE_FOLDER_PERMISSION_PATTERN,
+        GLOBAL_FORGE_FOLDER_PERMISSION_PATTERN,
+        LEGACY_CLAUDE_FOLDER_PERMISSION_PATTERN,
+        LEGACY_GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+        CLAUDE_FOLDER_PERMISSION_PATTERN,
+        GLOBAL_CLAUDE_FOLDER_PERMISSION_PATTERN,
+      ].some(pattern => ruleContent.startsWith(pattern.slice(0, -2))) &&
       !ruleContent.includes('..') &&
       ruleContent.endsWith('/**')
     ) {
@@ -1299,17 +1350,18 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     }
   }
 
-  // 1.7. Check comprehensive safety validations (Windows patterns, Claude config, dangerous files)
+  // 1.7. Check comprehensive safety validations (Windows patterns, config files, dangerous files)
   // This MUST come before checking allow rules to prevent users from accidentally granting
   // permission to edit protected files
   const safetyCheck = checkPathSafetyForAutoEdit(path, pathsToCheck)
   if (!safetyCheck.safe) {
-    // SDK suggestion: if under .claude/skills/{name}/, emit the narrowed
+    // SDK suggestion: if under .forge/skills/{name}/ (or legacy .claude/skills/{name}/), emit the narrowed
     // session-scoped addRules that step 1.6 will honor on the next call.
-    // Everything else (.claude/settings.json, .git/, .vscode/, .idea/) falls
+    // Everything else (.forge/settings.json, legacy .claude/settings.json,
+    // .git/, .vscode/, .idea/) falls
     // back to generateSuggestions — its setMode suggestion doesn't bypass
     // this check, but preserving it avoids a surprising empty array.
-    const skillScope = getClaudeSkillScope(path)
+    const skillScope = getConfigSkillScope(path)
     const safetySuggestions: PermissionUpdate[] = skillScope
       ? [
           {
@@ -1348,7 +1400,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
     if (askRule) {
       return {
         behavior: 'ask',
-        message: `Claude requested permissions to write to ${path}, but you haven't granted it yet.`,
+        message: `Forge requested permissions to write to ${path}, but you haven't granted it yet.`,
         decisionReason: {
           type: 'rule',
           rule: askRule,
@@ -1395,7 +1447,7 @@ export function checkWritePermissionForTool<Input extends AnyObject>(
   // 5. Default to asking for permission
   return {
     behavior: 'ask',
-    message: `Claude requested permissions to write to ${path}, but you haven't granted it yet.`,
+    message: `Forge requested permissions to write to ${path}, but you haven't granted it yet.`,
     suggestions: generateSuggestions(
       path,
       'write',
@@ -1511,7 +1563,8 @@ export function checkEditableInternalPath(
   // Template job's own directory. Env key hardcoded (vs importing JOB_ENV_KEY
   // from jobs/state) so tree-shaking eliminates the string from external
   // builds — spawn.test.ts asserts the string matches. Hijack guard: the env
-  // var value must itself resolve under ~/.claude/jobs/. Symlink guard: every
+  // var value must itself resolve under ~/.forge/jobs/ (or legacy
+  // ~/.claude/jobs/). Symlink guard: every
   // resolved form of the target (lexical + symlink chain) must fall under some
   // resolved form of the job dir, so a symlink inside the job dir pointing at
   // e.g. ~/.ssh/authorized_keys does not get a free write. Resolving both
@@ -1525,7 +1578,7 @@ export function checkEditableInternalPath(
       const jobsRootForms = getPathsForPermissionCheck(jobsRoot).map(normalize)
       // Hijack guard: every resolved form of the job dir must sit under
       // some resolved form of the jobs root. Resolving both sides handles
-      // the case where ~/.claude is a symlink (e.g. to /data/claude-config).
+      // the case where ~/.forge is a symlink (e.g. to /data/forge-config).
       const isUnderJobsRoot = jobDirForms.every(jd =>
         jobsRootForms.some(jr => jd.startsWith(jr + sep)),
       )
@@ -1564,7 +1617,8 @@ export function checkEditableInternalPath(
 
   // Memdir directory (persistent memory for cross-session learning)
   // This pre-safety-check carve-out exists because the default path is under
-  // ~/.claude/, which is in DANGEROUS_DIRECTORIES. The CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
+  // ~/.forge/ (with legacy ~/.claude fallback), which is in DANGEROUS_DIRECTORIES.
+  // The CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
   // override is an arbitrary caller-designated directory with no such conflict,
   // so it gets NO special permission treatment here — writes go through normal
   // permission flow (step 5 → ask). SDK callers who want silent memory should
@@ -1580,16 +1634,38 @@ export function checkEditableInternalPath(
     }
   }
 
-  // .claude/launch.json — desktop preview config (dev server command + port).
-  // The desktop's preview_start MCP tool instructs Claude to create/update
+  // .forge/launch.json (with legacy .claude fallback) — desktop preview config
+  // (dev server command + port). The desktop's preview_start MCP tool instructs
+  // Forge to create/update
   // this file as part of the preview workflow. Without this carve-out the
-  // .claude/ DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
+  // config-directory DANGEROUS_DIRECTORIES check prompts for it, which in SDK mode
   // cascades: user clicks "Always allow" → setMode:acceptEdits suggestion
   // applied → silent downgrade from auto mode. Matches the project-level
-  // .claude/ only (not ~/.claude/) since launch.json is per-project.
+  // config directory only (not the global config dir) since launch.json is per-project.
   if (
     normalizeCaseForComparison(normalizedPath) ===
-    normalizeCaseForComparison(join(getOriginalCwd(), '.claude', 'launch.json'))
+    normalizeCaseForComparison(
+      join(getOriginalCwd(), FORGE_PROJECT_CONFIG_DIRNAME, 'launch.json'),
+    )
+  ) {
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: {
+        type: 'other',
+        reason: 'Preview launch config is allowed for writing',
+      },
+    }
+  }
+  if (
+    normalizeCaseForComparison(normalizedPath) ===
+    normalizeCaseForComparison(
+      join(
+        getOriginalCwd(),
+        LEGACY_CLAUDE_PROJECT_CONFIG_DIRNAME,
+        'launch.json',
+      ),
+    )
   ) {
     return {
       behavior: 'allow',
@@ -1629,7 +1705,7 @@ export function checkReadableInternalPath(
   }
 
   // Project directory (for reading past session memories)
-  // Path format: ~/.claude/projects/{sanitized-cwd}/...
+  // Path format: ~/.forge/projects/{sanitized-cwd}/... with legacy ~/.claude/
   if (isProjectDirPath(normalizedPath)) {
     return {
       behavior: 'allow',
@@ -1724,7 +1800,8 @@ export function checkReadableInternalPath(
     }
   }
 
-  // Tasks directory (~/.claude/tasks/) for swarm task coordination
+  // Tasks directory (~/.forge/tasks/ with legacy ~/.claude/tasks/ fallback) for
+  // swarm task coordination
   const tasksDir = join(getClaudeConfigHomeDir(), 'tasks') + sep
   if (
     normalizedPath === tasksDir.slice(0, -1) ||
@@ -1740,7 +1817,8 @@ export function checkReadableInternalPath(
     }
   }
 
-  // Teams directory (~/.claude/teams/) for swarm coordination
+  // Teams directory (~/.forge/teams/ with legacy ~/.claude/teams/ fallback) for
+  // swarm coordination
   const teamsReadDir = join(getClaudeConfigHomeDir(), 'teams') + sep
   if (
     normalizedPath === teamsReadDir.slice(0, -1) ||

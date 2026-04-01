@@ -1,10 +1,14 @@
 import axios from 'axios'
 import memoize from 'lodash-es/memoize.js'
-import { getOauthConfig } from 'src/constants/oauth.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from 'src/services/analytics/index.js'
+import {
+  getActiveForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from 'src/services/auth/runtime.js'
 import { getClaudeAIOAuthTokens } from 'src/utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from 'src/utils/config.js'
 import { logForDebugging } from 'src/utils/debug.js'
@@ -39,6 +43,15 @@ const MCP_SERVERS_BETA_HEADER = 'mcp-servers-2025-12-04'
 export const fetchClaudeAIMcpConfigsIfEligible = memoize(
   async (): Promise<Record<string, ScopedMcpServerConfig>> => {
     try {
+      if (isUsingNativeOpenAISession()) {
+        logForDebugging('[claudeai-mcp] Native OpenAI sessions skip Claude.ai MCP')
+        logEvent('tengu_claudeai_mcp_eligibility', {
+          state:
+            'unsupported_native_openai' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        })
+        return {}
+      }
+
       if (isEnvDefinedFalsy(process.env.ENABLE_CLAUDEAI_MCP_SERVERS)) {
         logForDebugging('[claudeai-mcp] Disabled via env var')
         logEvent('tengu_claudeai_mcp_eligibility', {
@@ -48,12 +61,23 @@ export const fetchClaudeAIMcpConfigsIfEligible = memoize(
         return {}
       }
 
+      const forgeSession = getActiveForgeSession()
       const tokens = getClaudeAIOAuthTokens()
-      if (!tokens?.accessToken) {
+      const accessToken = forgeSession?.accessToken ?? tokens?.accessToken
+      if (!accessToken) {
         logForDebugging('[claudeai-mcp] No access token')
         logEvent('tengu_claudeai_mcp_eligibility', {
           state:
             'no_oauth_token' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        })
+        return {}
+      }
+
+      if (forgeSession && !forgeSession.capabilities.mcpProxy) {
+        logForDebugging('[claudeai-mcp] Forge session lacks MCP proxy access')
+        logEvent('tengu_claudeai_mcp_eligibility', {
+          state:
+            'missing_scope' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         })
         return {}
       }
@@ -63,7 +87,7 @@ export const fetchClaudeAIMcpConfigsIfEligible = memoize(
       // is set (even with valid OAuth tokens) because preferThirdPartyAuthentication() causes
       // isAnthropicAuthEnabled() to return false. Checking the scope directly allows users
       // with both API keys and OAuth tokens to access claude.ai MCPs in print mode.
-      if (!tokens.scopes?.includes('user:mcp_servers')) {
+      if (!forgeSession && !tokens?.scopes?.includes('user:mcp_servers')) {
         logForDebugging(
           `[claudeai-mcp] Missing user:mcp_servers scope (scopes=${tokens.scopes?.join(',') || 'none'})`,
         )
@@ -74,14 +98,14 @@ export const fetchClaudeAIMcpConfigsIfEligible = memoize(
         return {}
       }
 
-      const baseUrl = getOauthConfig().BASE_API_URL
+      const baseUrl = requireAuthenticatedApiBaseUrl()
       const url = `${baseUrl}/v1/mcp_servers?limit=1000`
 
       logForDebugging(`[claudeai-mcp] Fetching from ${url}`)
 
       const response = await axios.get<ClaudeAIMcpServersResponse>(url, {
         headers: {
-          Authorization: `Bearer ${tokens.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           'anthropic-beta': MCP_SERVERS_BETA_HEADER,
           'anthropic-version': '2023-06-01',

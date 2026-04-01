@@ -1,6 +1,10 @@
 import axios from 'axios'
 import memoize from 'lodash-es/memoize.js'
 import {
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from 'src/services/auth/runtime.js'
+import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from 'src/services/analytics/index.js'
@@ -9,7 +13,6 @@ import { logForDebugging } from 'src/utils/debug.js'
 import { gracefulShutdown } from 'src/utils/gracefulShutdown.js'
 import { isEssentialTrafficOnly } from 'src/utils/privacyLevel.js'
 import { writeToStderr } from 'src/utils/process.js'
-import { getOauthConfig } from '../../constants/oauth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import {
   getAuthHeaders,
@@ -51,18 +54,23 @@ export type ApiResult<T> = { success: true; data: T } | { success: false }
  */
 export const getGroveSettings = memoize(
   async (): Promise<ApiResult<AccountSettings>> => {
+    if (isUsingNativeOpenAISession()) {
+      return { success: false }
+    }
+
     // Grove is a notification feature; during an outage, skipping it is correct.
     if (isEssentialTrafficOnly()) {
       return { success: false }
     }
     try {
+      const baseUrl = requireAuthenticatedApiBaseUrl()
       const response = await withOAuth401Retry(() => {
         const authHeaders = getAuthHeaders()
         if (authHeaders.error) {
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<AccountSettings>(
-          `${getOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
+          `${baseUrl}/api/oauth/account/settings`,
           {
             headers: {
               ...authHeaders.headers,
@@ -88,14 +96,19 @@ export const getGroveSettings = memoize(
  * Mark that the Grove notice has been viewed by the user
  */
 export async function markGroveNoticeViewed(): Promise<void> {
+  if (isUsingNativeOpenAISession()) {
+    return
+  }
+
   try {
+    const baseUrl = requireAuthenticatedApiBaseUrl()
     await withOAuth401Retry(() => {
       const authHeaders = getAuthHeaders()
       if (authHeaders.error) {
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
       return axios.post(
-        `${getOauthConfig().BASE_API_URL}/api/oauth/account/grove_notice_viewed`,
+        `${baseUrl}/api/oauth/account/grove_notice_viewed`,
         {},
         {
           headers: {
@@ -120,14 +133,19 @@ export async function markGroveNoticeViewed(): Promise<void> {
 export async function updateGroveSettings(
   groveEnabled: boolean,
 ): Promise<void> {
+  if (isUsingNativeOpenAISession()) {
+    return
+  }
+
   try {
+    const baseUrl = requireAuthenticatedApiBaseUrl()
     await withOAuth401Retry(() => {
       const authHeaders = getAuthHeaders()
       if (authHeaders.error) {
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
       return axios.patch(
-        `${getOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
+        `${baseUrl}/api/oauth/account/settings`,
         {
           grove_enabled: groveEnabled,
         },
@@ -155,6 +173,10 @@ export async function updateGroveSettings(
  * false and the Grove dialog won't show until the next session.
  */
 export async function isQualifiedForGrove(): Promise<boolean> {
+  if (isUsingNativeOpenAISession()) {
+    return false
+  }
+
   if (!isConsumerSubscriber()) {
     return false
   }
@@ -231,6 +253,10 @@ async function fetchAndStoreGroveConfig(accountId: string): Promise<void> {
  */
 export const getGroveNoticeConfig = memoize(
   async (): Promise<ApiResult<GroveConfig>> => {
+    if (isUsingNativeOpenAISession()) {
+      return { success: false }
+    }
+
     // Grove is a notification feature; during an outage, skipping it is correct.
     if (isEssentialTrafficOnly()) {
       return { success: false }
@@ -242,7 +268,7 @@ export const getGroveNoticeConfig = memoize(
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<GroveConfig>(
-          `${getOauthConfig().BASE_API_URL}/api/claude_code_grove`,
+          `${requireAuthenticatedApiBaseUrl()}/api/claude_code_grove`,
           {
             headers: {
               ...authHeaders.headers,

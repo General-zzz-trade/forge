@@ -10,7 +10,7 @@
  * - Support for both JS and native builds
  */
 
-import { constants as fsConstants, type Stats } from 'fs'
+import { constants as fsConstants, existsSync, type Stats } from 'fs'
 import {
   access,
   chmod,
@@ -41,12 +41,17 @@ import { logForDebugging } from '../debug.js'
 import { getCurrentInstallationType } from '../doctorDiagnostic.js'
 import { env } from '../env.js'
 import { envDynamic } from '../envDynamic.js'
-import { isEnvTruthy } from '../envUtils.js'
+import {
+  getClaudeConfigHomeDir,
+  getLegacyClaudeConfigHomeDir,
+  isEnvTruthy,
+} from '../envUtils.js'
 import { errorMessage, getErrnoCode, isENOENT, toError } from '../errors.js'
 import { execFileNoThrowWithCwd } from '../execFileNoThrow.js'
 import { getShellType } from '../localInstaller.js'
 import * as lockfile from '../lockfile.js'
 import { logError } from '../log.js'
+import { getKnownNpmPackageNames } from './packageManagers.js'
 import { gt, gte } from '../semver.js'
 import {
   filterClaudeAliases,
@@ -109,26 +114,55 @@ export function getPlatform(): string {
 }
 
 export function getBinaryName(platform: string): string {
+  return platform.startsWith('win32') ? 'forge.exe' : 'forge'
+}
+
+export function getLegacyBinaryName(platform: string): string {
   return platform.startsWith('win32') ? 'claude.exe' : 'claude'
+}
+
+export function getDownloadedBinaryName(platform: string): string {
+  return getLegacyBinaryName(platform)
 }
 
 function getBaseDirectories() {
   const platform = getPlatform()
   const executableName = getBinaryName(platform)
+  const installerNamespace = getInstallerNamespace()
 
   return {
     // Data directories (permanent storage)
-    versions: join(getXDGDataHome(), 'claude', 'versions'),
+    versions: join(getXDGDataHome(), installerNamespace, 'versions'),
 
     // Cache directories (can be deleted)
-    staging: join(getXDGCacheHome(), 'claude', 'staging'),
+    staging: join(getXDGCacheHome(), installerNamespace, 'staging'),
 
     // State directories
-    locks: join(getXDGStateHome(), 'claude', 'locks'),
+    locks: join(getXDGStateHome(), installerNamespace, 'locks'),
 
     // User bin
     executable: join(getUserBinDir(), executableName),
   }
+}
+
+type InstallerNamespace = 'forge' | 'claude'
+
+function installerNamespaceExists(namespace: InstallerNamespace): boolean {
+  return (
+    existsSync(join(getXDGDataHome(), namespace)) ||
+    existsSync(join(getXDGCacheHome(), namespace)) ||
+    existsSync(join(getXDGStateHome(), namespace))
+  )
+}
+
+function getInstallerNamespace(): InstallerNamespace {
+  if (installerNamespaceExists('forge')) {
+    return 'forge'
+  }
+  if (installerNamespaceExists('claude')) {
+    return 'claude'
+  }
+  return 'forge'
 }
 
 async function isPossibleClaudeBinary(filePath: string): Promise<boolean> {
@@ -389,7 +423,7 @@ async function installVersionFromBinary(
   try {
     // For direct binary downloads (GCS, generic bucket), the binary is directly in staging
     const platform = getPlatform()
-    const binaryName = getBinaryName(platform)
+    const binaryName = getDownloadedBinaryName(platform)
     const stagedBinaryPath = join(stagingPath, binaryName)
 
     try {
@@ -444,7 +478,12 @@ async function performVersionUpdate(
 ): Promise<boolean> {
   const { stagingPath: baseStagingPath, installPath } =
     await getVersionPaths(version)
+  const platform = getPlatform()
   const { executable: executablePath } = getBaseDirectories()
+  const legacyExecutablePath = join(
+    getUserBinDir(),
+    getLegacyBinaryName(platform),
+  )
 
   // For lockless updates, use a unique staging path to avoid conflicts between concurrent downloads
   const stagingPath = isEnvTruthy(process.env.ENABLE_LOCKLESS_UPDATES)
@@ -465,9 +504,14 @@ async function performVersionUpdate(
     logForDebugging(`Version ${version} already installed, updating symlink`)
   }
 
-  // Create direct symlink from ~/.local/bin/claude to the version binary
+  // Create the primary Forge launcher and keep the legacy Claude launcher
+  // as a compatibility entry point to the same version binary.
   await removeDirectoryIfEmpty(executablePath)
   await updateSymlink(executablePath, installPath)
+  if (legacyExecutablePath !== executablePath) {
+    await removeDirectoryIfEmpty(legacyExecutablePath)
+    await updateSymlink(legacyExecutablePath, installPath)
+  }
 
   // Verify the executable was actually created/updated
   if (!(await isPossibleClaudeBinary(executablePath))) {
@@ -845,7 +889,7 @@ export async function checkInstall(
     })
   }
 
-  // Check if claude executable exists and is valid.
+  // Check if the Forge executable exists and is valid.
   // On non-Windows, call readlink directly and route errno — ENOENT means
   // the executable is missing, EINVAL means it exists but isn't a symlink.
   // This avoids an access()→readlink() TOCTOU where deletion between the
@@ -855,8 +899,8 @@ export async function checkInstall(
   if (isWindows) {
     // On Windows it's a copied executable, not a symlink
     if (!(await isPossibleClaudeBinary(dirs.executable))) {
-      messages.push({
-        message: `installMethod is native, but claude command is missing or invalid at ${dirs.executable}`,
+        messages.push({
+        message: `installMethod is native, but forge command is missing or invalid at ${dirs.executable}`,
         userActionRequired: true,
         type: 'error',
       })
@@ -867,7 +911,7 @@ export async function checkInstall(
       const absoluteTarget = resolve(dirname(dirs.executable), target)
       if (!(await isPossibleClaudeBinary(absoluteTarget))) {
         messages.push({
-          message: `Claude symlink points to missing or invalid binary: ${target}`,
+          message: `Forge symlink points to missing or invalid binary: ${target}`,
           userActionRequired: true,
           type: 'error',
         })
@@ -875,7 +919,7 @@ export async function checkInstall(
     } catch (e) {
       if (isENOENT(e)) {
         messages.push({
-          message: `installMethod is native, but claude command not found at ${dirs.executable}`,
+          message: `installMethod is native, but forge command not found at ${dirs.executable}`,
           userActionRequired: true,
           type: 'error',
         })
@@ -883,7 +927,7 @@ export async function checkInstall(
         // EINVAL (not a symlink) or other — check as regular binary
         if (!(await isPossibleClaudeBinary(dirs.executable))) {
           messages.push({
-            message: `${dirs.executable} exists but is not a valid Claude binary`,
+            message: `${dirs.executable} exists but is not a valid Forge binary`,
             userActionRequired: true,
             type: 'error',
           })
@@ -1195,7 +1239,7 @@ export async function cleanupOldVersions(): Promise<void> {
       const files = await readdir(executableDir)
       let cleanedCount = 0
       for (const file of files) {
-        if (!/^claude\.exe\.old\.\d+$/.test(file)) continue
+        if (!/^(?:forge|claude)\.exe\.old\.\d+$/.test(file)) continue
         try {
           await unlink(join(executableDir, file))
           cleanedCount++
@@ -1458,35 +1502,44 @@ async function isNpmSymlink(executablePath: string): Promise<boolean> {
 }
 
 /**
- * Remove the claude symlink from the executable directory
+ * Remove the installed native launchers from the executable directory
  * This is used when switching away from native installation
  * Will only remove if it's a native binary symlink, not npm-managed JS files
  */
 export async function removeInstalledSymlink(): Promise<void> {
+  const platform = getPlatform()
   const dirs = getBaseDirectories()
+  const executablePaths = [
+    dirs.executable,
+    join(getUserBinDir(), getLegacyBinaryName(platform)),
+  ]
 
-  try {
-    // Check if this is an npm-managed installation
-    if (await isNpmSymlink(dirs.executable)) {
-      logForDebugging(
-        `Skipping removal of ${dirs.executable} - appears to be npm-managed`,
+  for (const executablePath of new Set(executablePaths)) {
+    try {
+      // Check if this is an npm-managed installation
+      if (await isNpmSymlink(executablePath)) {
+        logForDebugging(
+          `Skipping removal of ${executablePath} - appears to be npm-managed`,
+        )
+        continue
+      }
+
+      // It's a native binary symlink or copied executable, safe to remove
+      await unlink(executablePath)
+      logForDebugging(`Removed native launcher at ${executablePath}`)
+    } catch (error) {
+      if (isENOENT(error)) {
+        continue
+      }
+      logError(
+        new Error(`Failed to remove native launcher ${executablePath}: ${error}`),
       )
-      return
     }
-
-    // It's a native binary symlink, safe to remove
-    await unlink(dirs.executable)
-    logForDebugging(`Removed claude symlink at ${dirs.executable}`)
-  } catch (error) {
-    if (isENOENT(error)) {
-      return
-    }
-    logError(new Error(`Failed to remove claude symlink: ${error}`))
   }
 }
 
 /**
- * Clean up old claude aliases from shell configuration files
+ * Clean up old installer-managed aliases from shell configuration files
  * Only handles alias removal, not PATH setup
  */
 export async function cleanupShellAliases(): Promise<SetupMessage[]> {
@@ -1503,11 +1556,11 @@ export async function cleanupShellAliases(): Promise<SetupMessage[]> {
       if (hadAlias) {
         await writeFileLines(configFile, filtered)
         messages.push({
-          message: `Removed claude alias from ${configFile}. Run: unalias claude`,
+          message: `Removed installer-managed CLI alias from ${configFile}. Restart your shell if the old alias is still active.`,
           userActionRequired: true,
           type: 'alias',
         })
-        logForDebugging(`Cleaned up claude alias from ${shellType} config`)
+        logForDebugging(`Cleaned up managed CLI alias from ${shellType} config`)
       }
     } catch (error) {
       logError(error)
@@ -1662,45 +1715,36 @@ export async function cleanupNpmInstallations(): Promise<{
   const warnings: string[] = []
   let removed = 0
 
-  // Always attempt to remove @anthropic-ai/claude-code
-  const codePackageResult = await attemptNpmUninstall(
-    '@anthropic-ai/claude-code',
-  )
-  if (codePackageResult.success) {
-    removed++
-    if (codePackageResult.warning) {
-      warnings.push(codePackageResult.warning)
-    }
-  } else if (codePackageResult.error) {
-    errors.push(codePackageResult.error)
-  }
-
-  // Also attempt to remove MACRO.PACKAGE_URL if it's defined and different
-  if (MACRO.PACKAGE_URL && MACRO.PACKAGE_URL !== '@anthropic-ai/claude-code') {
-    const macroPackageResult = await attemptNpmUninstall(MACRO.PACKAGE_URL)
-    if (macroPackageResult.success) {
+  for (const packageName of getKnownNpmPackageNames()) {
+    const packageResult = await attemptNpmUninstall(packageName)
+    if (packageResult.success) {
       removed++
-      if (macroPackageResult.warning) {
-        warnings.push(macroPackageResult.warning)
+      if (packageResult.warning) {
+        warnings.push(packageResult.warning)
       }
-    } else if (macroPackageResult.error) {
-      errors.push(macroPackageResult.error)
+    } else if (packageResult.error) {
+      errors.push(packageResult.error)
     }
   }
 
-  // Check for local installation at ~/.claude/local
-  const localInstallDir = join(homedir(), '.claude', 'local')
+  // Check for local installations under both the active and legacy config homes.
+  const localInstallDirs = new Set([
+    join(getClaudeConfigHomeDir(), 'local'),
+    join(getLegacyClaudeConfigHomeDir(), 'local'),
+  ])
 
-  try {
-    await rm(localInstallDir, { recursive: true })
-    removed++
-    logForDebugging(`Removed local installation at ${localInstallDir}`)
-  } catch (error) {
-    if (!isENOENT(error)) {
-      errors.push(`Failed to remove ${localInstallDir}: ${error}`)
-      logForDebugging(`Failed to remove local installation: ${error}`, {
-        level: 'error',
-      })
+  for (const localInstallDir of localInstallDirs) {
+    try {
+      await rm(localInstallDir, { recursive: true })
+      removed++
+      logForDebugging(`Removed local installation at ${localInstallDir}`)
+    } catch (error) {
+      if (!isENOENT(error)) {
+        errors.push(`Failed to remove ${localInstallDir}: ${error}`)
+        logForDebugging(`Failed to remove local installation: ${error}`, {
+          level: 'error',
+        })
+      }
     }
   }
 

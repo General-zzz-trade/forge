@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { getOauthConfig, OAUTH_BETA_HEADER } from 'src/constants/oauth.js'
+import { OAUTH_BETA_HEADER } from 'src/constants/oauth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import {
   getIsNonInteractiveSession,
@@ -34,6 +34,10 @@ import {
   updateSettingsForSource,
 } from './settings/settings.js'
 import { createSignal } from './signal.js'
+import {
+  getActiveForgeSession,
+  requireAuthenticatedApiBaseUrl,
+} from '../services/auth/runtime.js'
 
 export function isFastModeEnabled(): boolean {
   return !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_FAST_MODE)
@@ -130,7 +134,9 @@ export function getFastModeUnavailableReason(): string | null {
       }
     }
     const authType: AuthType =
-      getClaudeAIOAuthTokens() !== null ? 'oauth' : 'api-key'
+      getActiveForgeSession() !== null || getClaudeAIOAuthTokens() !== null
+        ? 'oauth'
+        : 'api-key'
     const reason = getDisabledReasonMessage(orgStatus.reason, authType)
     logForDebugging(`Fast mode unavailable: ${reason}`)
     return reason
@@ -367,7 +373,7 @@ type FastModeResponse = {
 async function fetchFastModeStatus(
   auth: { accessToken: string } | { apiKey: string },
 ): Promise<FastModeResponse> {
-  const endpoint = `${getOauthConfig().BASE_API_URL}/api/claude_code_penguin_mode`
+  const endpoint = `${requireAuthenticatedApiBaseUrl()}/api/claude_code_penguin_mode`
   const headers: Record<string, string> =
     'accessToken' in auth
       ? {
@@ -425,8 +431,12 @@ export async function prefetchFastModeStatus(): Promise<void> {
   // Resolve orgStatus from cache and bail before burning the throttle window.
   // API key auth is unaffected.
   const apiKey = getAnthropicApiKey()
+  const forgeSession = getActiveForgeSession()
   const hasUsableOAuth =
-    getClaudeAIOAuthTokens()?.accessToken && hasProfileScope()
+    Boolean(
+      forgeSession?.accessToken ||
+        (getClaudeAIOAuthTokens()?.accessToken && hasProfileScope()),
+    )
   if (!hasUsableOAuth && !apiKey) {
     const isAnt = process.env.USER_TYPE === 'ant'
     const cachedEnabled = getGlobalConfig().penguinModeOrgEnabled === true
@@ -445,9 +455,12 @@ export async function prefetchFastModeStatus(): Promise<void> {
   lastPrefetchAt = now
 
   const fetchWithCurrentAuth = async (): Promise<FastModeResponse> => {
+    const currentForgeSession = getActiveForgeSession()
     const currentTokens = getClaudeAIOAuthTokens()
     const auth =
-      currentTokens?.accessToken && hasProfileScope()
+      currentForgeSession?.accessToken
+        ? { accessToken: currentForgeSession.accessToken }
+        : currentTokens?.accessToken && hasProfileScope()
         ? { accessToken: currentTokens.accessToken }
         : apiKey
           ? { apiKey }
@@ -471,6 +484,9 @@ export async function prefetchFastModeStatus(): Promise<void> {
               typeof err.response?.data === 'string' &&
               err.response.data.includes('OAuth token has been revoked')))
         if (isAuthError) {
+          if (getActiveForgeSession()?.accessToken) {
+            throw err
+          }
           const failedAccessToken = getClaudeAIOAuthTokens()?.accessToken
           if (failedAccessToken) {
             await handleOAuth401Error(failedAccessToken)

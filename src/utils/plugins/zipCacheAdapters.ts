@@ -21,6 +21,7 @@ import {
   type PluginMarketplace,
   PluginMarketplaceSchema,
 } from './schemas.js'
+import { getMarketplaceManifestCandidates } from './pluginManifestPaths.js'
 import {
   atomicWriteToZipCache,
   getMarketplaceJsonRelativePath,
@@ -114,13 +115,12 @@ export async function saveMarketplaceJsonToZipCache(
 
 /**
  * Read marketplace.json content from a cloned marketplace directory or file.
- * For directory sources: checks .claude-plugin/marketplace.json, marketplace.json
- * For URL sources: the installLocation IS the marketplace JSON file itself.
+ * For directory sources: checks .forge-plugin/marketplace.json first, then
+ * legacy or root fallbacks. For URL sources, installLocation itself is the file.
  */
 async function readMarketplaceJsonContent(dir: string): Promise<string | null> {
   const candidates = [
-    join(dir, '.claude-plugin', 'marketplace.json'),
-    join(dir, 'marketplace.json'),
+    ...getMarketplaceManifestCandidates(dir, true),
     dir, // For URL sources, installLocation IS the marketplace JSON file
   ]
   for (const candidate of candidates) {

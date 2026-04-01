@@ -16,15 +16,15 @@ import {
   MDM_SUBPROCESS_TIMEOUT_MS,
   PLUTIL_ARGS_PREFIX,
   PLUTIL_PATH,
-  WINDOWS_REGISTRY_KEY_PATH_HKCU,
-  WINDOWS_REGISTRY_KEY_PATH_HKLM,
+  WINDOWS_REGISTRY_KEY_PATHS_HKCU,
+  WINDOWS_REGISTRY_KEY_PATHS_HKLM,
   WINDOWS_REGISTRY_VALUE_NAME,
 } from './constants.js'
 
 export type RawReadResult = {
   plistStdouts: Array<{ stdout: string; label: string }> | null
-  hklmStdout: string | null
-  hkcuStdout: string | null
+  hklm: { stdout: string; keyPath: string } | null
+  hkcu: { stdout: string; keyPath: string } | null
 }
 
 let rawReadPromise: Promise<RawReadResult> | null = null
@@ -44,6 +44,23 @@ function execFilePromise(
       },
     )
   })
+}
+
+async function queryRegistryPaths(
+  keyPaths: readonly string[],
+): Promise<{ stdout: string; keyPath: string } | null> {
+  for (const keyPath of keyPaths) {
+    const { stdout, code } = await execFilePromise('reg', [
+      'query',
+      keyPath,
+      '/v',
+      WINDOWS_REGISTRY_VALUE_NAME,
+    ])
+    if (code === 0 && stdout) {
+      return { stdout, keyPath }
+    }
+  }
+  return null
 }
 
 /**
@@ -82,34 +99,24 @@ export function fireRawRead(): Promise<RawReadResult> {
         plistStdouts: winner
           ? [{ stdout: winner.stdout, label: winner.label }]
           : [],
-        hklmStdout: null,
-        hkcuStdout: null,
+        hklm: null,
+        hkcu: null,
       }
     }
 
     if (process.platform === 'win32') {
       const [hklm, hkcu] = await Promise.all([
-        execFilePromise('reg', [
-          'query',
-          WINDOWS_REGISTRY_KEY_PATH_HKLM,
-          '/v',
-          WINDOWS_REGISTRY_VALUE_NAME,
-        ]),
-        execFilePromise('reg', [
-          'query',
-          WINDOWS_REGISTRY_KEY_PATH_HKCU,
-          '/v',
-          WINDOWS_REGISTRY_VALUE_NAME,
-        ]),
+        queryRegistryPaths(WINDOWS_REGISTRY_KEY_PATHS_HKLM),
+        queryRegistryPaths(WINDOWS_REGISTRY_KEY_PATHS_HKCU),
       ])
       return {
         plistStdouts: null,
-        hklmStdout: hklm.code === 0 ? hklm.stdout : null,
-        hkcuStdout: hkcu.code === 0 ? hkcu.stdout : null,
+        hklm,
+        hkcu,
       }
     }
 
-    return { plistStdouts: null, hklmStdout: null, hkcuStdout: null }
+    return { plistStdouts: null, hklm: null, hkcu: null }
   })()
 }
 

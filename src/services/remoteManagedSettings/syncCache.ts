@@ -16,6 +16,10 @@ import {
   getAPIProvider,
   isFirstPartyAnthropicBaseUrl,
 } from '../../utils/model/providers.js'
+import {
+  isUsingBrokeredForgeSession,
+  isUsingNativeOpenAISession,
+} from '../auth/runtime.js'
 
 import {
   resetSyncCache as resetLeafCache,
@@ -54,16 +58,24 @@ export function isRemoteManagedSettingsEligible(): boolean {
     return (cached = setEligibility(false))
   }
 
-  // Custom base URL users should not hit the settings endpoint
-  if (!isFirstPartyAnthropicBaseUrl()) {
-    return (cached = setEligibility(false))
-  }
-
   // Cowork runs in a VM with its own permission model; server-managed settings
   // (designed for CLI/CCD) don't apply there, and per-surface settings don't
   // exist yet. MDM/file-based managed settings still apply via settings.ts —
   // those require physical deployment and a different IT intent.
   if (process.env.CLAUDE_CODE_ENTRYPOINT === 'local-agent') {
+    return (cached = setEligibility(false))
+  }
+
+  if (isUsingNativeOpenAISession()) {
+    return (cached = setEligibility(false))
+  }
+
+  if (isUsingBrokeredForgeSession()) {
+    return (cached = setEligibility(true))
+  }
+
+  // Custom base URL users should not hit the settings endpoint
+  if (!isFirstPartyAnthropicBaseUrl()) {
     return (cached = setEligibility(false))
   }
 

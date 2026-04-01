@@ -54,14 +54,14 @@ export async function importGithubToken(
   | { ok: true; result: ImportTokenResult }
   | { ok: false; error: ImportTokenError }
 > {
-  let accessToken: string, orgUUID: string
+  let accessToken: string, orgUUID: string, baseUrl: string
   try {
-    ;({ accessToken, orgUUID } = await prepareApiRequest())
+    ;({ accessToken, orgUUID, baseUrl } = await prepareApiRequest())
   } catch {
     return { ok: false, error: { kind: 'not_signed_in' } }
   }
 
-  const url = `${getOauthConfig().BASE_API_URL}/v1/code/github/import-token`
+  const url = `${baseUrl}/v1/code/github/import-token`
   const headers = {
     ...getOAuthHeaders(accessToken),
     'anthropic-beta': CCR_BYOC_BETA_HEADER,
@@ -117,9 +117,9 @@ async function hasExistingEnvironment(): Promise<boolean> {
  * machine falls back to env-setup on next load.
  */
 export async function createDefaultEnvironment(): Promise<boolean> {
-  let accessToken: string, orgUUID: string
+  let accessToken: string, orgUUID: string, baseUrl: string
   try {
-    ;({ accessToken, orgUUID } = await prepareApiRequest())
+    ;({ accessToken, orgUUID, baseUrl } = await prepareApiRequest())
   } catch {
     return false
   }
@@ -131,7 +131,7 @@ export async function createDefaultEnvironment(): Promise<boolean> {
   // The /private/organizations/{org}/ path rejects CLI OAuth tokens (wrong
   // auth dep). The public path uses build_flexible_auth — same path
   // fetchEnvironments() uses. Org is passed via x-organization-uuid header.
-  const url = `${getOauthConfig().BASE_API_URL}/v1/environment_providers/cloud/create`
+  const url = `${baseUrl}/v1/environment_providers/cloud/create`
   const headers = {
     ...getOAuthHeaders(accessToken),
     'x-organization-uuid': orgUUID,

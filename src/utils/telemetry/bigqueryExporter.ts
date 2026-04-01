@@ -9,6 +9,10 @@ import {
 } from '@opentelemetry/sdk-metrics'
 import axios from 'axios'
 import { checkMetricsEnabled } from 'src/services/api/metricsOptOut.js'
+import {
+  getAuthenticatedApiBaseUrl,
+  isUsingNativeOpenAISession,
+} from 'src/services/auth/runtime.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import { getSubscriptionType, isClaudeAISubscriber } from '../auth.js'
 import { checkHasTrustDialogAccepted } from '../config.js'
@@ -44,7 +48,7 @@ export class BigQueryMetricsExporter implements PushMetricExporter {
   private isShutdown = false
 
   constructor(options: { timeout?: number } = {}) {
-    const defaultEndpoint = 'https://api.anthropic.com/api/claude_code/metrics'
+    const defaultEndpoint = `${getAuthenticatedApiBaseUrl() || 'https://api.anthropic.com'}/api/claude_code/metrics`
 
     if (
       process.env.USER_TYPE === 'ant' &&
@@ -89,6 +93,11 @@ export class BigQueryMetricsExporter implements PushMetricExporter {
     resultCallback: (result: ExportResult) => void,
   ): Promise<void> {
     try {
+      if (isUsingNativeOpenAISession()) {
+        resultCallback({ code: ExportResultCode.SUCCESS })
+        return
+      }
+
       // Skip if trust not established in interactive mode
       // This prevents triggering apiKeyHelper before trust dialog
       const hasTrust =

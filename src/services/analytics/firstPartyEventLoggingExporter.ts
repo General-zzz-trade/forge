@@ -10,6 +10,10 @@ import { appendFile, mkdir, readdir, unlink, writeFile } from 'fs/promises'
 import * as path from 'path'
 import type { CoreUserData } from 'src/utils/user.js'
 import {
+  getAuthenticatedApiBaseUrl,
+  isUsingNativeOpenAISession,
+} from '../auth/runtime.js'
+import {
   getIsNonInteractiveSession,
   getSessionId,
 } from '../../bootstrap/state.js'
@@ -90,6 +94,7 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
   private attempts = 0
   private isRetrying = false
   private lastExportErrorContext: string | undefined
+  private readonly disabled: boolean
 
   constructor(
     options: {
@@ -109,10 +114,13 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
       schedule?: (fn: () => Promise<void>, delayMs: number) => () => void
     } = {},
   ) {
+    this.disabled = isUsingNativeOpenAISession()
+
     // Default: prod, except when ANTHROPIC_BASE_URL is explicitly staging.
     // Overridable via tengu_1p_event_batch_config.baseUrl.
     const baseUrl =
       options.baseUrl ||
+      getAuthenticatedApiBaseUrl() ||
       (process.env.ANTHROPIC_BASE_URL === 'https://api-staging.anthropic.com'
         ? 'https://api-staging.anthropic.com'
         : 'https://api.anthropic.com')
@@ -134,8 +142,10 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
         return () => clearTimeout(t)
       })
 
-    // Retry any failed events from previous runs of this session (in background)
-    void this.retryPreviousBatches()
+    if (!this.disabled) {
+      // Retry any failed events from previous runs of this session (in background)
+      void this.retryPreviousBatches()
+    }
   }
 
   // Expose for testing
@@ -278,6 +288,11 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
     logs: ReadableLogRecord[],
     resultCallback: (result: ExportResult) => void,
   ): Promise<void> {
+    if (this.disabled || isUsingNativeOpenAISession()) {
+      resultCallback({ code: ExportResultCode.SUCCESS })
+      return
+    }
+
     if (this.isShutdown) {
       if (process.env.USER_TYPE === 'ant') {
         logForDebugging(
@@ -527,6 +542,10 @@ export class FirstPartyEventLoggingExporter implements LogRecordExporter {
   private async sendBatchWithRetry(
     payload: FirstPartyEventLoggingPayload,
   ): Promise<void> {
+    if (this.disabled || isUsingNativeOpenAISession()) {
+      return
+    }
+
     if (this.isKilled()) {
       // Throw so the caller short-circuits remaining batches and queues
       // everything to disk. Zero network traffic while killed; the backoff

@@ -1,19 +1,18 @@
-import type { McpbManifest } from '@anthropic-ai/mcpb'
+import type { McpbManifest } from '../plugins/forgeMcpb.js'
 import { errorMessage } from '../errors.js'
+import { McpbManifestSchema } from '../plugins/forgeMcpb.js'
 import { jsonParse } from '../slowOperations.js'
 
 /**
  * Parses and validates a DXT manifest from a JSON object.
  *
- * Lazy-imports @anthropic-ai/mcpb: that package uses zod v3 which eagerly
- * creates 24 .bind(this) closures per schema instance (~300 instances between
- * schemas.js and schemas-loose.js). Deferring the import keeps ~700KB of bound
- * closures out of the startup heap for sessions that never touch .dxt/.mcpb.
+ * Uses Forge's local MCP bundle schema. Keeping validation in-repo avoids a
+ * hard dependency on Anthropic's private MCPB package while preserving the
+ * lazy validation path for sessions that never touch .dxt/.mcpb.
  */
 export async function validateManifest(
   manifestJson: unknown,
 ): Promise<McpbManifest> {
-  const { McpbManifestSchema } = await import('@anthropic-ai/mcpb')
   const parseResult = McpbManifestSchema.safeParse(manifestJson)
 
   if (!parseResult.success) {

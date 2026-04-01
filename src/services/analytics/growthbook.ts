@@ -1,6 +1,10 @@
 import { GrowthBook } from '@growthbook/growthbook'
 import { isEqual, memoize } from 'lodash-es'
 import {
+  getAuthenticatedApiBaseUrl,
+  isUsingNativeOpenAISession,
+} from '../auth/runtime.js'
+import {
   getIsNonInteractiveSession,
   getSessionTrustAccepted,
 } from '../../bootstrap/state.js'
@@ -493,6 +497,10 @@ const getGrowthBookClient = memoize(
       return null
     }
 
+    if (isUsingNativeOpenAISession()) {
+      return null
+    }
+
     const attributes = getUserAttributes()
     const clientKey = getGrowthBookClientKey()
     if (process.env.USER_TYPE === 'ant') {
@@ -500,10 +508,11 @@ const getGrowthBookClient = memoize(
         `GrowthBook: Creating client with clientKey=${clientKey}, attributes: ${jsonStringify(attributes)}`,
       )
     }
-    const baseUrl =
-      process.env.USER_TYPE === 'ant'
-        ? process.env.CLAUDE_CODE_GB_BASE_URL || 'https://api.anthropic.com/'
-        : 'https://api.anthropic.com/'
+    const configuredGrowthbookBaseUrl =
+      process.env.CLAUDE_CODE_GB_BASE_URL ||
+      getAuthenticatedApiBaseUrl() ||
+      'https://api.anthropic.com'
+    const baseUrl = `${configuredGrowthbookBaseUrl.replace(/\/$/, '')}/`
 
     // Skip auth if trust hasn't been established yet
     // This prevents executing apiKeyHelper commands before the trust dialog
@@ -1025,7 +1034,7 @@ let beforeExitListener: (() => void) | null = null
  * this preserves client state and just fetches fresh feature values.
  */
 export async function refreshGrowthBookFeatures(): Promise<void> {
-  if (!isGrowthBookEnabled()) {
+  if (!isGrowthBookEnabled() || isUsingNativeOpenAISession()) {
     return
   }
 
@@ -1085,7 +1094,7 @@ export async function refreshGrowthBookFeatures(): Promise<void> {
  * feature values stay fresh. Matches Statsig's 6-hour refresh interval.
  */
 export function setupPeriodicGrowthBookRefresh(): void {
-  if (!isGrowthBookEnabled()) {
+  if (!isGrowthBookEnabled() || isUsingNativeOpenAISession()) {
     return
   }
 

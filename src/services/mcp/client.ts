@@ -44,6 +44,7 @@ import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
 import type { Command } from '../../commands.js'
 import { getOauthConfig } from '../../constants/oauth.js'
 import { PRODUCT_URL } from '../../constants/product.js'
+import { getActiveForgeSession } from '../auth/runtime.js'
 import type { AppState } from '../../state/AppState.js'
 import {
   type Tool,
@@ -235,9 +236,9 @@ import { isClaudeInChromeMCPServer } from '../../utils/claudeInChrome/common.js'
 const claudeInChromeToolRendering =
   (): typeof import('../../utils/claudeInChrome/toolRendering.js') =>
     require('../../utils/claudeInChrome/toolRendering.js')
-// Lazy: wrapper.tsx → hostAdapter.ts → executor.ts pulls both native modules
-// (@ant/computer-use-input + @ant/computer-use-swift). Runtime-gated by
-// GrowthBook tengu_malort_pedway (see gates.ts).
+// Lazy: wrapper.tsx → hostAdapter.ts → executor.ts pulls both computer-use
+// native runtimes. Runtime-gated by GrowthBook tengu_malort_pedway
+// (see gates.ts).
 const computerUseWrapper = feature('CHICAGO_MCP')
   ? (): typeof import('../../utils/computerUse/wrapper.js') =>
       require('../../utils/computerUse/wrapper.js')
@@ -372,14 +373,18 @@ function handleRemoteAuthFailure(
 export function createClaudeAiProxyFetch(innerFetch: FetchLike): FetchLike {
   return async (url, init) => {
     const doRequest = async () => {
-      await checkAndRefreshOAuthTokenIfNeeded()
-      const currentTokens = getClaudeAIOAuthTokens()
-      if (!currentTokens) {
-        throw new Error('No claude.ai OAuth token available')
+      if (!getActiveForgeSession()) {
+        await checkAndRefreshOAuthTokenIfNeeded()
+      }
+      const currentAccessToken =
+        getActiveForgeSession()?.accessToken ??
+        getClaudeAIOAuthTokens()?.accessToken
+      if (!currentAccessToken) {
+        throw new Error('No authenticated MCP session token available')
       }
       // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
       const headers = new Headers(init?.headers)
-      headers.set('Authorization', `Bearer ${currentTokens.accessToken}`)
+      headers.set('Authorization', `Bearer ${currentAccessToken}`)
       const response = await innerFetch(url, { ...init, headers })
       // Return the exact token that was sent. Reading getClaudeAIOAuthTokens()
       // again after the request is wrong under concurrent 401s: another
@@ -387,11 +392,14 @@ export function createClaudeAiProxyFetch(innerFetch: FetchLike): FetchLike {
       // the NEW token from keychain, pass it to handleOAuth401Error, which
       // finds same-as-keychain → returns false → skips retry. Same pattern as
       // bridgeApi.ts withOAuthRetry (token passed as fn param).
-      return { response, sentToken: currentTokens.accessToken }
+      return { response, sentToken: currentAccessToken }
     }
 
     const { response, sentToken } = await doRequest()
     if (response.status !== 401) {
+      return response
+    }
+    if (getActiveForgeSession()?.accessToken) {
       return response
     }
     // handleOAuth401Error returns true only if the token actually changed
@@ -911,7 +919,7 @@ export const connectToServer = memoize(
           '../../utils/claudeInChrome/mcpServer.js'
         )
         const { createClaudeForChromeMcpServer } = await import(
-          '@ant/claude-for-chrome-mcp'
+          '../../utils/claudeInChrome/vendor.js'
         )
         const { createLinkedTransportPair } = await import(
           './InProcessTransport.js'
@@ -985,7 +993,7 @@ export const connectToServer = memoize(
       const client = new Client(
         {
           name: 'claude-code',
-          title: 'Claude Code',
+          title: 'Forge',
           version: MACRO.VERSION ?? 'unknown',
           description: "Anthropic's agentic coding tool",
           websiteUrl: PRODUCT_URL,
@@ -3280,7 +3288,7 @@ export async function setupSdkMcpClients(
       const client = new Client(
         {
           name: 'claude-code',
-          title: 'Claude Code',
+          title: 'Forge',
           version: MACRO.VERSION ?? 'unknown',
           description: "Anthropic's agentic coding tool",
           websiteUrl: PRODUCT_URL,

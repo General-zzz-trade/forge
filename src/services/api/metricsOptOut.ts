@@ -1,4 +1,8 @@
 import axios from 'axios'
+import {
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from 'src/services/auth/runtime.js'
 import { hasProfileScope, isClaudeAISubscriber } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -42,7 +46,7 @@ async function _fetchMetricsEnabled(): Promise<MetricsEnabledResponse> {
     ...authResult.headers,
   }
 
-  const endpoint = `https://api.anthropic.com/api/claude_code/organizations/metrics_enabled`
+  const endpoint = `${requireAuthenticatedApiBaseUrl()}/api/claude_code/organizations/metrics_enabled`
   const response = await axios.get<MetricsEnabledResponse>(endpoint, {
     headers,
     timeout: 5000,
@@ -51,6 +55,10 @@ async function _fetchMetricsEnabled(): Promise<MetricsEnabledResponse> {
 }
 
 async function _checkMetricsEnabledAPI(): Promise<MetricsStatus> {
+  if (isUsingNativeOpenAISession()) {
+    return { enabled: false, hasError: false }
+  }
+
   // Incident kill switch: skip the network call when nonessential traffic is disabled.
   // Returning enabled:false sheds load at the consumer (bigqueryExporter skips
   // export). Matches the non-subscriber early-return shape below.
@@ -126,6 +134,10 @@ async function refreshMetricsStatus(): Promise<MetricsStatus> {
  * an extra one during the 24h window is acceptable.
  */
 export async function checkMetricsEnabled(): Promise<MetricsStatus> {
+  if (isUsingNativeOpenAISession()) {
+    return { enabled: false, hasError: false }
+  }
+
   // Service key OAuth sessions lack user:profile scope → would 403.
   // API key users (non-subscribers) fall through and use x-api-key auth.
   // This check runs before the disk read so we never persist auth-state-derived

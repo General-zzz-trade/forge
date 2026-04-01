@@ -1,7 +1,7 @@
 /**
  * CLI `ComputerExecutor` implementation. Wraps two native modules:
- *   - `@ant/computer-use-input` (Rust/enigo) — mouse, keyboard, frontmost app
- *   - `@ant/computer-use-swift` — SCContentFilter screenshots, NSWorkspace apps, TCC
+ *   - Forge computer-use input runtime (Rust/enigo) — mouse, keyboard, frontmost app
+ *   - Forge computer-use Swift runtime — SCContentFilter screenshots, NSWorkspace apps, TCC
  *
  * Contract: `packages/desktop/computer-use-mcp/src/executor.ts` in the apps
  * repo. The reference impl is Cowork's `apps/desktop/src/main/nest-only/
@@ -21,7 +21,7 @@
  *   eat clicks meant for the target app). Also stripped from `allowedBundleIds`
  *   via `withoutTerminal()` so screenshots don't capture it (Swift 0.2.1's
  *   captureExcluding takes an allow-list despite the name — apps#30355).
- *   `capabilities.hostBundleId` stays as the sentinel — the package's
+ *   `capabilities.hostBundleId` stays as the sentinel — the runtime's
  *   frontmost gate uses that, and the terminal being frontmost is fine.
  *
  * Clipboard via `pbcopy`/`pbpaste`. No Electron `clipboard` module.
@@ -35,9 +35,9 @@ import type {
   ResolvePrepareCaptureResult,
   RunningApp,
   ScreenshotResult,
-} from '@ant/computer-use-mcp'
+} from './forgeComputerUse.js'
 
-import { API_RESIZE_PARAMS, targetImageSize } from '@ant/computer-use-mcp'
+import { API_RESIZE_PARAMS, targetImageSize } from './forgeComputerUse.js'
 import { logForDebugging } from '../debug.js'
 import { errorMessage } from '../errors.js'
 import { execFileNoThrow } from '../execFileNoThrow.js'

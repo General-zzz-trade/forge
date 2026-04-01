@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { getOauthConfig } from '../../constants/oauth.js'
 import {
   getOauthAccountInfo,
   getSubscriptionType,
@@ -26,14 +25,14 @@ let fetchInProgress: Promise<ReferralEligibilityResponse | null> | null = null
 export async function fetchReferralEligibility(
   campaign: ReferralCampaign = 'claude_code_guest_pass',
 ): Promise<ReferralEligibilityResponse> {
-  const { accessToken, orgUUID } = await prepareApiRequest()
+  const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
   const headers = {
     ...getOAuthHeaders(accessToken),
     'x-organization-uuid': orgUUID,
   }
 
-  const url = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/referral/eligibility`
+  const url = `${baseUrl}/api/oauth/organizations/${orgUUID}/referral/eligibility`
 
   const response = await axios.get(url, {
     headers,
@@ -47,14 +46,14 @@ export async function fetchReferralEligibility(
 export async function fetchReferralRedemptions(
   campaign: string = 'claude_code_guest_pass',
 ): Promise<ReferralRedemptionsResponse> {
-  const { accessToken, orgUUID } = await prepareApiRequest()
+  const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
   const headers = {
     ...getOAuthHeaders(accessToken),
     'x-organization-uuid': orgUUID,
   }
 
-  const url = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/referral/redemptions`
+  const url = `${baseUrl}/api/oauth/organizations/${orgUUID}/referral/redemptions`
 
   const response = await axios.get<ReferralRedemptionsResponse>(url, {
     headers,

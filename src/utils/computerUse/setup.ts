@@ -1,4 +1,4 @@
-import { buildComputerUseTools } from '@ant/computer-use-mcp'
+import { buildComputerUseTools } from './forgeComputerUse.js'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { buildMcpToolName } from '../../services/mcp/mcpStringUtils.js'
@@ -9,16 +9,16 @@ import { CLI_CU_CAPABILITIES, COMPUTER_USE_MCP_SERVER_NAME } from './common.js'
 import { getChicagoCoordinateMode } from './gates.js'
 
 /**
- * Build the dynamic MCP config + allowed tool names. Mirror of
- * `setupClaudeInChrome`. The `mcp__computer-use__*` tools are added to
+ * Build the dynamic MCP config + allowed tool names. Mirrors the browser
+ * control MCP setup. The `mcp__computer-use__*` tools are added to
  * `allowedTools` so they bypass the normal permission prompt — the package's
  * `request_access` handles approval for the whole session.
  *
  * The MCP layer isn't ceremony: the API backend detects `mcp__computer-use__*`
  * tool names and emits a CU availability hint into the system prompt
- * (COMPUTER_USE_MCP_AVAILABILITY_HINT in the anthropic repo). Built-in tools
- * with different names wouldn't trigger it. Cowork uses the same names for the
- * same reason (apps/desktop/src/main/local-agent-mode/systemPrompt.ts:314).
+ * (COMPUTER_USE_MCP_AVAILABILITY_HINT in the upstream runtime). Built-in tools
+ * with different names wouldn't trigger it. The desktop app uses the same
+ * names for the same reason.
  */
 export function setupComputerUseMCP(): {
   mcpConfig: Record<string, ScopedMcpServerConfig>

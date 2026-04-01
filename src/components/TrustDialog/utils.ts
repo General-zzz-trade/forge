@@ -5,6 +5,9 @@ import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { SAFE_ENV_VARS } from '../../utils/managedEnvConstants.js'
 import { getPermissionRulesForSource } from '../../utils/permissions/permissionsLoader.js'
 
+const PROJECT_SETTINGS_DISPLAY_PATH = '.forge/settings.json'
+const LOCAL_SETTINGS_DISPLAY_PATH = '.forge/settings.local.json'
+
 function hasHooks(settings: SettingsJson | null): boolean {
   if (settings === null || settings.disableAllHooks) {
     return false
@@ -31,12 +34,12 @@ export function getHooksSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasHooks(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasHooks(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -60,12 +63,12 @@ export function getBashPermissionSources(): string[] {
 
   const projectRules = getPermissionRulesForSource('projectSettings')
   if (hasBashPermission(projectRules)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localRules = getPermissionRulesForSource('localSettings')
   if (hasBashPermission(localRules)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -119,12 +122,12 @@ export function getOtelHeadersHelperSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasOtelHeadersHelper(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasOtelHeadersHelper(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -146,12 +149,12 @@ export function getApiKeyHelperSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasApiKeyHelper(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasApiKeyHelper(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -173,12 +176,12 @@ export function getAwsCommandsSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasAwsCommands(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasAwsCommands(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -200,12 +203,12 @@ export function getGcpCommandsSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasGcpCommands(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasGcpCommands(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources
@@ -233,12 +236,12 @@ export function getDangerousEnvVarsSources(): string[] {
 
   const projectSettings = getSettingsForSource('projectSettings')
   if (hasDangerousEnvVars(projectSettings)) {
-    sources.push('.claude/settings.json')
+    sources.push(PROJECT_SETTINGS_DISPLAY_PATH)
   }
 
   const localSettings = getSettingsForSource('localSettings')
   if (hasDangerousEnvVars(localSettings)) {
-    sources.push('.claude/settings.local.json')
+    sources.push(LOCAL_SETTINGS_DISPLAY_PATH)
   }
 
   return sources

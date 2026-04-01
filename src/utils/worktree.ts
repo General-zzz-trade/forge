@@ -17,6 +17,7 @@ import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { errorMessage, getErrnoCode } from './errors.js'
 import { execFileNoThrow, execFileNoThrowWithCwd } from './execFileNoThrow.js'
+import { getPreferredProjectConfigDir } from './forgePaths.js'
 import { parseGitConfigValue } from './git/gitConfigParser.js'
 import {
   getCommonDir,
@@ -51,10 +52,10 @@ const MAX_WORKTREE_SLUG_LENGTH = 64
 /**
  * Validates a worktree slug to prevent path traversal and directory escape.
  *
- * The slug is joined into `.claude/worktrees/<slug>` via path.join, which
- * normalizes `..` segments — so `../../../target` would escape the worktrees
- * directory. Similarly, an absolute path (leading `/` or `C:\`) would discard
- * the prefix entirely.
+ * The slug is joined into `.forge/worktrees/<slug>` (with legacy `.claude/`
+ * compatibility) via path.join, which normalizes `..` segments — so
+ * `../../../target` would escape the worktrees directory. Similarly, an
+ * absolute path (leading `/` or `C:\`) would discard the prefix entirely.
  *
  * Forward slashes are allowed for nesting (e.g. `asm/feature-foo`); each
  * segment is validated independently against the allowlist, so `.` / `..`
@@ -202,16 +203,16 @@ const GIT_NO_PROMPT_ENV = {
 }
 
 function worktreesDir(repoRoot: string): string {
-  return join(repoRoot, '.claude', 'worktrees')
+  return join(getPreferredProjectConfigDir(repoRoot), 'worktrees')
 }
 
 // Flatten nested slugs (`user/feature` → `user+feature`) for both the branch
 // name and the directory path. Nesting in either location is unsafe:
 //   - git refs: `worktree-user` (file) vs `worktree-user/feature` (needs dir)
 //     is a D/F conflict that git rejects.
-//   - directory: `.claude/worktrees/user/feature/` lives inside the `user`
-//     worktree; `git worktree remove` on the parent deletes children with
-//     uncommitted work.
+//   - directory: `.forge/worktrees/user/feature/` (with legacy `.claude/`)
+//     lives inside the `user` worktree; `git worktree remove` on the parent
+//     deletes children with uncommitted work.
 // `+` is valid in git branch names and filesystem paths but NOT in the
 // slug-segment allowlist ([a-zA-Z0-9._-]), so the mapping is injective.
 function flattenSlug(slug: string): string {
@@ -511,7 +512,8 @@ async function performPostCreationSetup(
   repoRoot: string,
   worktreePath: string,
 ): Promise<void> {
-  // Copy settings.local.json to the worktree's .claude directory
+  // Copy settings.local.json to the worktree's config directory (.forge with
+  // legacy .claude compatibility)
   // This propagates local settings (which may contain secrets) to the worktree
   const localSettingsRelativePath =
     getRelativeSettingsFilePathForSource('localSettings')
@@ -920,9 +922,10 @@ export async function createAgentWorktree(slug: string): Promise<{
 
   // Fall back to git worktree
   // findCanonicalGitRoot (not findGitRoot) so agent worktrees always land in
-  // the main repo's .claude/worktrees/ even when spawned from inside a session
-  // worktree — otherwise they nest at <worktree>/.claude/worktrees/ and the
-  // periodic cleanup (which scans the canonical root) never finds them.
+  // the main repo's .forge/worktrees/ (with legacy .claude compatibility)
+  // even when spawned from inside a session worktree — otherwise they nest at
+  // <worktree>/.forge/worktrees/ and the periodic cleanup (which scans the
+  // canonical root) never finds them.
   const gitRoot = findCanonicalGitRoot(getCwd())
   if (!gitRoot) {
     throw new Error(

@@ -1,5 +1,8 @@
 import axios from 'axios'
-import { getOauthConfig } from '../../constants/oauth.js'
+import {
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from 'src/services/auth/runtime.js'
 import {
   getClaudeAIOAuthTokens,
   hasProfileScope,
@@ -31,6 +34,10 @@ export type Utilization = {
 }
 
 export async function fetchUtilization(): Promise<Utilization | null> {
+  if (isUsingNativeOpenAISession()) {
+    return {}
+  }
+
   if (!isClaudeAISubscriber() || !hasProfileScope()) {
     return {}
   }
@@ -52,7 +59,7 @@ export async function fetchUtilization(): Promise<Utilization | null> {
     ...authResult.headers,
   }
 
-  const url = `${getOauthConfig().BASE_API_URL}/api/oauth/usage`
+  const url = `${requireAuthenticatedApiBaseUrl()}/api/oauth/usage`
 
   const response = await axios.get<Utilization>(url, {
     headers,

@@ -1,15 +1,16 @@
 /**
  * Utilities for managing shell configuration files (like .bashrc, .zshrc)
- * Used for managing claude aliases and PATH entries
+ * Used for managing CLI aliases and PATH entries
  */
 
 import { open, readFile, stat } from 'fs/promises'
 import { homedir as osHomedir } from 'os'
 import { join } from 'path'
 import { isFsInaccessible } from './errors.js'
-import { getLocalClaudePath } from './localInstaller.js'
+import { getLocalClaudePath, getLocalForgePath } from './localInstaller.js'
 
-export const CLAUDE_ALIAS_REGEX = /^\s*alias\s+claude\s*=/
+const INSTALLER_ALIAS_NAMES = new Set(['forge', 'claude'])
+export const CLI_ALIAS_REGEX = /^\s*alias\s+(?:forge|claude)\s*=/
 
 type EnvLike = Record<string, string | undefined>
 
@@ -37,37 +38,41 @@ export function getShellConfigPaths(
 }
 
 /**
- * Filter out installer-created claude aliases from an array of lines
- * Only removes aliases pointing to $HOME/.claude/local/claude
+ * Filter out installer-created CLI aliases from an array of lines.
+ * Only removes aliases pointing to the managed local launcher wrappers.
  * Preserves custom user aliases that point to other locations
- * Returns the filtered lines and whether our default installer alias was found
+ * Returns the filtered lines and whether an installer-managed alias was found.
  */
 export function filterClaudeAliases(lines: string[]): {
   filtered: string[]
   hadAlias: boolean
 } {
+  const managedTargets = new Set([getLocalForgePath(), getLocalClaudePath()])
   let hadAlias = false
   const filtered = lines.filter(line => {
-    // Check if this is a claude alias
-    if (CLAUDE_ALIAS_REGEX.test(line)) {
+    // Check if this is a managed CLI alias.
+    if (CLI_ALIAS_REGEX.test(line)) {
       // Extract the alias target - handle spaces, quotes, and various formats
       // First try with quotes
-      let match = line.match(/alias\s+claude\s*=\s*["']([^"']+)["']/)
+      let match = line.match(
+        /alias\s+(forge|claude)\s*=\s*["']([^"']+)["']/,
+      )
       if (!match) {
         // Try without quotes (capturing until end of line or comment)
-        match = line.match(/alias\s+claude\s*=\s*([^#\n]+)/)
+        match = line.match(/alias\s+(forge|claude)\s*=\s*([^#\n]+)/)
       }
 
-      if (match && match[1]) {
-        const target = match[1].trim()
+      if (match && match[1] && match[2]) {
+        const aliasName = match[1]
+        const target = match[2].trim()
         // Only remove if it points to the installer location
-        // The installer always creates aliases with the full expanded path
-        if (target === getLocalClaudePath()) {
+        // The installer always creates aliases with the full expanded path.
+        if (INSTALLER_ALIAS_NAMES.has(aliasName) && managedTargets.has(target)) {
           hadAlias = true
           return false // Remove this line
         }
       }
-      // Keep custom aliases that don't point to the installer location
+      // Keep custom aliases that don't point to the installer location.
     }
     return true
   })
@@ -107,8 +112,8 @@ export async function writeFileLines(
 }
 
 /**
- * Check if a claude alias exists in any shell config file
- * Returns the alias target if found, null otherwise
+ * Check if a managed CLI alias exists in any shell config file.
+ * Returns the alias target if found, null otherwise.
  * @param options Optional overrides for testing (env, homedir)
  */
 export async function findClaudeAlias(
@@ -121,11 +126,11 @@ export async function findClaudeAlias(
     if (!lines) continue
 
     for (const line of lines) {
-      if (CLAUDE_ALIAS_REGEX.test(line)) {
+      if (CLI_ALIAS_REGEX.test(line)) {
         // Extract the alias target
-        const match = line.match(/alias\s+claude=["']?([^"'\s]+)/)
-        if (match && match[1]) {
-          return match[1]
+        const match = line.match(/alias\s+(forge|claude)\s*=\s*["']?([^"'\s]+)/)
+        if (match && match[1] && match[2]) {
+          return match[2]
         }
       }
     }
@@ -135,7 +140,7 @@ export async function findClaudeAlias(
 }
 
 /**
- * Check if a claude alias exists and points to a valid executable
+ * Check if a managed CLI alias exists and points to a valid executable.
  * Returns the alias target if valid, null otherwise
  * @param options Optional overrides for testing (env, homedir)
  */

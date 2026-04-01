@@ -125,10 +125,13 @@ export type BaseAgentDefinition = {
   memory?: AgentMemoryScope // Persistent memory scope
   isolation?: 'worktree' | 'remote' // Run in an isolated git worktree, or remotely in CCR (ant-only)
   pendingSnapshotUpdate?: { snapshotTimestamp: string }
-  /** Omit CLAUDE.md hierarchy from the agent's userContext. Read-only agents
-   * (Explore, Plan) don't need commit/PR/lint guidelines — the main agent has
-   * full CLAUDE.md and interprets their output. Saves ~5-15 Gtok/week across
-   * 34M+ Explore spawns. Kill-switch: tengu_slim_subagent_claudemd. */
+  /** Omit the instruction-file hierarchy from the agent's userContext.
+   * Read-only agents (Explore, Plan) don't need commit/PR/lint guidance —
+   * the main agent has the full instruction prompt and interprets their
+   * output. Saves ~5-15 Gtok/week across 34M+ Explore spawns. Kill-switch:
+   * tengu_slim_subagent_claudemd. */
+  omitInstructionsPrompt?: boolean
+  /** @deprecated Use omitInstructionsPrompt instead. */
   omitClaudeMd?: boolean
 }
 

@@ -2,6 +2,11 @@ import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import type { GoogleAuth } from 'google-auth-library'
 import {
+  getActiveForgeSession,
+  getPreferredForgeModelProvider,
+  requireForgeApiBaseUrl,
+} from 'src/services/auth/runtime.js'
+import {
   checkAndRefreshOAuthTokenIfNeeded,
   getAnthropicApiKey,
   getApiKeyFromApiKeyHelper,
@@ -98,6 +103,14 @@ export async function getAnthropicClient({
   fetchOverride?: ClientOptions['fetch']
   source?: string
 }): Promise<Anthropic> {
+  const activeSession =
+    getAPIProvider() === 'firstParty' ? getActiveForgeSession() : null
+  const forgeSession = activeSession?.issuer === 'forge' ? activeSession : null
+  if (activeSession?.issuer === 'openai') {
+    throw new Error(
+      'Native OpenAI sessions no longer depend on Forge broker/bootstrap, but the OpenAI-native model runtime is not wired into this Anthropic client path yet.',
+    )
+  }
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
@@ -114,6 +127,13 @@ export async function getAnthropicClient({
     // SDK consumers can identify their app/library for backend analytics
     ...(clientApp ? { 'x-client-app': clientApp } : {}),
   }
+  if (forgeSession) {
+    defaultHeaders['x-forge-auth-provider'] = forgeSession.authProvider
+    const preferredModelProvider = getPreferredForgeModelProvider()
+    if (preferredModelProvider) {
+      defaultHeaders['x-forge-model-provider'] = preferredModelProvider
+    }
+  }
 
   // Log API client configuration for HFI debugging
   logForDebugging(
@@ -128,11 +148,17 @@ export async function getAnthropicClient({
     defaultHeaders['x-anthropic-additional-protection'] = 'true'
   }
 
-  logForDebugging('[API:auth] OAuth token check starting')
-  await checkAndRefreshOAuthTokenIfNeeded()
-  logForDebugging('[API:auth] OAuth token check complete')
+  if (forgeSession) {
+    logForDebugging(
+      `[API:auth] Forge session active (${forgeSession.authProvider}), skipping Anthropic OAuth refresh`,
+    )
+  } else {
+    logForDebugging('[API:auth] OAuth token check starting')
+    await checkAndRefreshOAuthTokenIfNeeded()
+    logForDebugging('[API:auth] OAuth token check complete')
+  }
 
-  if (!isClaudeAISubscriber()) {
+  if (!forgeSession && !isClaudeAISubscriber()) {
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
@@ -299,15 +325,23 @@ export async function getAnthropicClient({
 
   // Determine authentication method based on available tokens
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-    apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
-    authToken: isClaudeAISubscriber()
+    apiKey: forgeSession
+      ? null
+      : isClaudeAISubscriber()
+        ? null
+        : apiKey || getAnthropicApiKey(),
+    authToken: forgeSession
+      ? forgeSession.accessToken
+      : isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
     // Set baseURL from OAuth config when using staging OAuth
-    ...(process.env.USER_TYPE === 'ant' &&
-    isEnvTruthy(process.env.USE_STAGING_OAUTH)
-      ? { baseURL: getOauthConfig().BASE_API_URL }
-      : {}),
+    ...(forgeSession
+      ? { baseURL: requireForgeApiBaseUrl() }
+      : process.env.USER_TYPE === 'ant' &&
+          isEnvTruthy(process.env.USE_STAGING_OAUTH)
+        ? { baseURL: getOauthConfig().BASE_API_URL }
+        : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

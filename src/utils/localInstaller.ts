@@ -5,7 +5,10 @@
 import { access, chmod, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { type ReleaseChannel, saveGlobalConfig } from './config.js'
-import { getClaudeConfigHomeDir } from './envUtils.js'
+import {
+  getClaudeConfigHomeDir,
+  getLegacyClaudeConfigHomeDir,
+} from './envUtils.js'
 import { getErrnoCode } from './errors.js'
 import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
 import { getFsImplementation } from './fsOperations.js'
@@ -13,22 +16,30 @@ import { logError } from './log.js'
 import { jsonStringify } from './slowOperations.js'
 
 // Lazy getters: getClaudeConfigHomeDir() is memoized and reads process.env.
-// Evaluating at module scope would capture the value before entrypoints like
-// hfi.tsx get a chance to set CLAUDE_CONFIG_DIR in main(), and would also
-// populate the memoize cache with that stale value for all 150+ other callers.
-function getLocalInstallDir(): string {
+// Evaluating at module scope would capture the value before entrypoints set a
+// config-dir override env var in main(), and would also populate the memoize
+// cache with that stale value for all 150+ other callers.
+export function getLocalInstallDir(): string {
   return join(getClaudeConfigHomeDir(), 'local')
 }
 export function getLocalClaudePath(): string {
   return join(getLocalInstallDir(), 'claude')
+}
+export function getLocalForgePath(): string {
+  return join(getLocalInstallDir(), 'forge')
 }
 
 /**
  * Check if we're running from our managed local installation
  */
 export function isRunningFromLocalInstallation(): boolean {
-  const execPath = process.argv[1] || ''
-  return execPath.includes('/.claude/local/node_modules/')
+  const execPath = (process.argv[1] || '').replaceAll('\\', '/')
+  const localNodeModulesRoots = new Set(
+    [getClaudeConfigHomeDir(), getLegacyClaudeConfigHomeDir()].map(dir =>
+      join(dir, 'local', 'node_modules').replaceAll('\\', '/'),
+    ),
+  )
+  return [...localNodeModulesRoots].some(root => execPath.includes(root))
 }
 
 /**
@@ -49,6 +60,21 @@ async function writeIfMissing(
   }
 }
 
+async function ensureWrapperScript(
+  wrapperPath: string,
+  targetPath: string,
+): Promise<void> {
+  const created = await writeIfMissing(
+    wrapperPath,
+    `#!/bin/sh\nexec "${targetPath}" "$@"`,
+    0o755,
+  )
+  if (created) {
+    // Mode in writeFile is masked by umask; chmod to ensure executable bit.
+    await chmod(wrapperPath, 0o755)
+  }
+}
+
 /**
  * Ensure the local package environment is set up
  * Creates the directory, package.json, and wrapper script
@@ -64,23 +90,17 @@ export async function ensureLocalPackageEnvironment(): Promise<boolean> {
     await writeIfMissing(
       join(localInstallDir, 'package.json'),
       jsonStringify(
-        { name: 'claude-local', version: '0.0.1', private: true },
+        { name: 'forge-local', version: '0.0.1', private: true },
         null,
         2,
       ),
     )
 
-    // Create the wrapper script if it doesn't exist
-    const wrapperPath = join(localInstallDir, 'claude')
-    const created = await writeIfMissing(
-      wrapperPath,
-      `#!/bin/sh\nexec "${localInstallDir}/node_modules/.bin/claude" "$@"`,
-      0o755,
-    )
-    if (created) {
-      // Mode in writeFile is masked by umask; chmod to ensure executable bit.
-      await chmod(wrapperPath, 0o755)
-    }
+    // Create both wrapper scripts so the local install can be invoked via
+    // either the legacy `claude` name or the renamed `forge` launcher.
+    const cliEntryPoint = `${localInstallDir}/node_modules/.bin/claude`
+    await ensureWrapperScript(join(localInstallDir, 'claude'), cliEntryPoint)
+    await ensureWrapperScript(join(localInstallDir, 'forge'), cliEntryPoint)
 
     return true
   } catch (error) {

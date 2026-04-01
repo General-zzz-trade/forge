@@ -32,6 +32,8 @@ export function fileSuffixForOauthConfig(): string {
 
 export const CLAUDE_AI_INFERENCE_SCOPE = 'user:inference' as const
 export const CLAUDE_AI_PROFILE_SCOPE = 'user:profile' as const
+export const FIRST_PARTY_INFERENCE_SCOPE = CLAUDE_AI_INFERENCE_SCOPE
+export const FIRST_PARTY_PROFILE_SCOPE = CLAUDE_AI_PROFILE_SCOPE
 const CONSOLE_SCOPE = 'org:create_api_key' as const
 export const OAUTH_BETA_HEADER = 'oauth-2025-04-20' as const
 
@@ -49,6 +51,7 @@ export const CLAUDE_AI_OAUTH_SCOPES = [
   'user:mcp_servers',
   'user:file_upload',
 ] as const
+export const FIRST_PARTY_OAUTH_SCOPES = CLAUDE_AI_OAUTH_SCOPES
 
 // All OAuth scopes - union of all scopes used in Claude CLI
 // When logging in, request all scopes in order to handle both Console -> Claude.ai redirect
@@ -106,7 +109,7 @@ const PROD_OAUTH_CONFIG = {
 /**
  * Client ID Metadata Document URL for MCP OAuth (CIMD / SEP-991).
  * When an MCP auth server advertises client_id_metadata_document_supported: true,
- * Claude Code uses this URL as its client_id instead of Dynamic Client Registration.
+ * Forge uses this URL as its client_id instead of Dynamic Client Registration.
  * The URL must point to a JSON document hosted by Anthropic.
  * See: https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00
  */

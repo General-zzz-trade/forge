@@ -12,6 +12,7 @@ import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
 import { createSystemAPIErrorMessage } from 'src/utils/messages.js'
 import { getAPIProviderForStatsig } from 'src/utils/model/providers.js'
+import { isUsingForgeSession } from '../auth/runtime.js'
 import {
   clearApiKeyHelperCache,
   clearAwsCredentialsCache,
@@ -327,7 +328,7 @@ export async function* withRetry<T>(
       if (
         is529Error(error) &&
         // If FALLBACK_FOR_ALL_PRIMARY_MODELS is not set, fall through only if the primary model is a non-custom Opus model.
-        // TODO: Revisit if the isNonCustomOpusModel check should still exist, or if isNonCustomOpusModel is a stale artifact of when Claude Code was hardcoded on Opus.
+        // TODO: Revisit if the isNonCustomOpusModel check should still exist, or if isNonCustomOpusModel is a stale artifact of when Forge was hardcoded on Opus.
         (process.env.FALLBACK_FOR_ALL_PRIMARY_MODELS ||
           (!isClaudeAISubscriber() && isNonCustomOpusModel(options.model)))
       ) {
@@ -772,12 +773,12 @@ function shouldRetry(error: APIError): boolean {
   // OAuth token handling is done in the main retry loop via handleOAuth401Error.
   if (error.status === 401) {
     clearApiKeyHelperCache()
-    return true
+    return !isUsingForgeSession()
   }
 
   // Retry on 403 "token revoked" (same refresh logic as 401, see above)
   if (isOAuthTokenRevokedError(error)) {
-    return true
+    return !isUsingForgeSession()
   }
 
   // Retry internal errors.

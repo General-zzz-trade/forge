@@ -1,10 +1,10 @@
 /**
  * Files are loaded in the following order:
  *
- * 1. Managed memory (eg. /etc/claude-code/CLAUDE.md) - Global instructions for all users
- * 2. User memory (~/.claude/CLAUDE.md) - Private global instructions for all projects
- * 3. Project memory (CLAUDE.md, .claude/CLAUDE.md, and .claude/rules/*.md in project roots) - Instructions checked into the codebase
- * 4. Local memory (CLAUDE.local.md in project roots) - Private project-specific instructions
+ * 1. Managed memory (eg. /etc/forge/FORGE.md, with legacy /etc/claude-code/CLAUDE.md fallback) - Global instructions for all users
+ * 2. User memory (~/.forge/FORGE.md, with legacy ~/.claude/CLAUDE.md fallback) - Private global instructions for all projects
+ * 3. Project memory (FORGE.md, .forge/FORGE.md, and .forge/rules/*.md in project roots; legacy CLAUDE.md/.claude/* still supported) - Instructions checked into the codebase
+ * 4. Local memory (FORGE.local.md in project roots, with legacy CLAUDE.local.md fallback) - Private project-specific instructions
  *
  * Files are loaded in reverse order of priority, i.e. the latest files are highest priority
  * with the model paying more attention to them.
@@ -13,7 +13,7 @@
  * - User memory is loaded from the user's home directory
  * - Project and Local files are discovered by traversing from the current directory up to root
  * - Files closer to the current directory have higher priority (loaded later)
- * - CLAUDE.md, .claude/CLAUDE.md, and all .md files in .claude/rules/ are checked in each directory for Project memory
+ * - FORGE.md, .forge/FORGE.md, and all .md files in .forge/rules/ are checked in each directory for Project memory, with legacy CLAUDE.md/.claude fallbacks
  *
  * Memory @include directive:
  * - Memory files can include other files using @ notation
@@ -42,7 +42,7 @@ import {
 import picomatch from 'picomatch'
 import { logEvent } from 'src/services/analytics/index.js'
 import {
-  getAdditionalDirectoriesForClaudeMd,
+  getAdditionalInstructionDirectories,
   getOriginalCwd,
 } from '../bootstrap/state.js'
 import { truncateEntrypointContent } from '../memdir/memdir.js'
@@ -50,9 +50,11 @@ import { getAutoMemEntrypoint, isAutoMemoryEnabled } from '../memdir/paths.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import {
   getCurrentProjectConfig,
-  getManagedClaudeRulesDir,
+  hasInstructionExternalIncludesApproved,
+  hasInstructionExternalIncludesWarningShown,
+  getManagedInstructionRulesDir,
   getMemoryPath,
-  getUserClaudeRulesDir,
+  getUserInstructionRulesDir,
 } from './config.js'
 import { logForDebugging } from './debug.js'
 import { logForDiagnosticsNoPII } from './diagLogs.js'
@@ -66,6 +68,7 @@ import {
 } from './frontmatterParser.js'
 import { getFsImplementation, safeResolvePath } from './fsOperations.js'
 import { findCanonicalGitRoot, findGitRoot } from './git.js'
+import { shouldLoadAdditionalInstructionDirectoriesByEnv } from './instructionEnv.js'
 import {
   executeInstructionsLoadedHooks,
   hasInstructionsLoadedHook,
@@ -75,6 +78,13 @@ import {
 import type { MemoryType } from './memory/types.js'
 import { expandPath } from './path.js'
 import { pathInWorkingPath } from './permissions/filesystem.js'
+import {
+  getPreferredLocalInstructionPath,
+  getPreferredProjectInstructionPath,
+  getPreferredProjectRulesDir,
+  getPreferredScopedProjectInstructionPath,
+  isInstructionFileBasename,
+} from './forgePaths.js'
 import { isSettingSourceEnabled } from './settings/constants.js'
 import { getInitialSettings } from './settings/settings.js'
 
@@ -537,19 +547,21 @@ function extractIncludePathsFromTokens(
 const MAX_INCLUDE_DEPTH = 5
 
 /**
- * Checks whether a CLAUDE.md file path is excluded by the claudeMdExcludes setting.
+ * Checks whether an instruction file path is excluded by the instructionExcludes
+ * setting, with legacy claudeMdExcludes fallback.
  * Only applies to User, Project, and Local memory types.
  * Managed, AutoMem, and TeamMem types are never excluded.
  *
  * Matches both the original path and the realpath-resolved path to handle symlinks
  * (e.g., /tmp -> /private/tmp on macOS).
  */
-function isClaudeMdExcluded(filePath: string, type: MemoryType): boolean {
+function isInstructionFileExcluded(filePath: string, type: MemoryType): boolean {
   if (type !== 'User' && type !== 'Project' && type !== 'Local') {
     return false
   }
 
-  const patterns = getInitialSettings().claudeMdExcludes
+  const settings = getInitialSettings()
+  const patterns = settings.instructionExcludes ?? settings.claudeMdExcludes
   if (!patterns || patterns.length === 0) {
     return false
   }
@@ -559,7 +571,7 @@ function isClaudeMdExcluded(filePath: string, type: MemoryType): boolean {
 
   // Build an expanded pattern list that includes realpath-resolved versions of
   // absolute patterns. This handles symlinks like /tmp -> /private/tmp on macOS:
-  // the user writes "/tmp/project/CLAUDE.md" in their exclude, but the system
+  // the user writes "/tmp/project/FORGE.md" in their exclude, but the system
   // resolves the CWD to "/private/tmp/project/...", so the file path uses the
   // real path. By resolving the patterns too, both sides match.
   const expandedPatterns = resolveExcludePatterns(patterns).filter(
@@ -596,7 +608,8 @@ function resolveExcludePatterns(patterns: string[]): string[] {
     const dirToResolve = dirname(staticPrefix)
 
     try {
-      // sync IO: called from sync context (isClaudeMdExcluded -> processMemoryFile -> getMemoryFiles)
+      // sync IO: called from sync context
+      // (isInstructionFileExcluded -> processMemoryFile -> getMemoryFiles)
       const resolvedDir = fs.realpathSync(dirToResolve).replaceAll('\\', '/')
       if (resolvedDir !== dirToResolve) {
         const resolvedPattern =
@@ -631,8 +644,9 @@ export async function processMemoryFile(
     return []
   }
 
-  // Skip if path is excluded by claudeMdExcludes setting
-  if (isClaudeMdExcluded(filePath, type)) {
+  // Skip if path is excluded by instructionExcludes or legacy
+  // claudeMdExcludes settings.
+  if (isInstructionFileExcluded(filePath, type)) {
     return []
   }
 
@@ -685,7 +699,8 @@ export async function processMemoryFile(
 }
 
 /**
- * Processes all .md files in the .claude/rules/ directory and its subdirectories
+ * Processes all .md files in the rules directory tree, including preferred
+ * .forge/rules/ paths and legacy .claude/rules/ fallbacks.
  * @param rulesDir The path to the rules directory
  * @param type Type of memory file (User, Project, Local)
  * @param processedPaths Set of already processed file paths
@@ -792,29 +807,29 @@ export const getMemoryFiles = memoize(
     const startTime = Date.now()
     logForDiagnosticsNoPII('info', 'memory_files_started')
 
-    const result: MemoryFileInfo[] = []
-    const processedPaths = new Set<string>()
-    const config = getCurrentProjectConfig()
-    const includeExternal =
+  const result: MemoryFileInfo[] = []
+  const processedPaths = new Set<string>()
+  const config = getCurrentProjectConfig()
+  const includeExternal =
       forceIncludeExternal ||
-      config.hasClaudeMdExternalIncludesApproved ||
+      hasInstructionExternalIncludesApproved(config) ||
       false
 
     // Process Managed file first (always loaded - policy settings)
-    const managedClaudeMd = getMemoryPath('Managed')
+    const managedInstructionsPath = getMemoryPath('Managed')
     result.push(
       ...(await processMemoryFile(
-        managedClaudeMd,
+        managedInstructionsPath,
         'Managed',
         processedPaths,
         includeExternal,
       )),
     )
-    // Process Managed .claude/rules/*.md files
-    const managedClaudeRulesDir = getManagedClaudeRulesDir()
+    // Process managed instruction rules
+    const managedInstructionRulesDir = getManagedInstructionRulesDir()
     result.push(
       ...(await processMdRules({
-        rulesDir: managedClaudeRulesDir,
+        rulesDir: managedInstructionRulesDir,
         type: 'Managed',
         processedPaths,
         includeExternal,
@@ -824,20 +839,20 @@ export const getMemoryFiles = memoize(
 
     // Process User file (only if userSettings is enabled)
     if (isSettingSourceEnabled('userSettings')) {
-      const userClaudeMd = getMemoryPath('User')
+      const userInstructionsPath = getMemoryPath('User')
       result.push(
         ...(await processMemoryFile(
-          userClaudeMd,
+          userInstructionsPath,
           'User',
           processedPaths,
           true, // User memory can always include external files
         )),
       )
-      // Process User ~/.claude/rules/*.md files
-      const userClaudeRulesDir = getUserClaudeRulesDir()
+      // Process user instruction rules
+      const userInstructionRulesDir = getUserInstructionRulesDir()
       result.push(
         ...(await processMdRules({
-          rulesDir: userClaudeRulesDir,
+          rulesDir: userInstructionRulesDir,
           type: 'User',
           processedPaths,
           includeExternal: true,
@@ -857,13 +872,15 @@ export const getMemoryFiles = memoize(
     }
 
     // When running from a git worktree nested inside its main repo (e.g.,
-    // .claude/worktrees/<name>/ from `claude -w`), the upward walk passes
+    // .forge/worktrees/<name>/ or legacy .claude/worktrees/<name>), the
+    // upward walk passes
     // through both the worktree root and the main repo root. Both contain
-    // checked-in files like CLAUDE.md and .claude/rules/*.md, so the same
+    // checked-in instruction files and rules, so the same
     // content gets loaded twice. Skip Project-type (checked-in) files from
     // directories above the worktree but within the main repo — the worktree
-    // already has its own checkout. CLAUDE.local.md is gitignored so it only
-    // exists in the main repo and is still loaded.
+    // already has its own checkout. FORGE.local.md / legacy CLAUDE.local.md
+    // are gitignored, so they typically only exist in the main repo and are
+    // still loaded.
     // See: https://github.com/anthropics/claude-code/issues/29599
     const gitRoot = findGitRoot(originalCwd)
     const canonicalRoot = findCanonicalGitRoot(originalCwd)
@@ -883,9 +900,9 @@ export const getMemoryFiles = memoize(
         pathInWorkingPath(dir, canonicalRoot) &&
         !pathInWorkingPath(dir, gitRoot)
 
-      // Try reading CLAUDE.md (Project) - only if projectSettings is enabled
+      // Try reading the project instruction file - only if projectSettings is enabled
       if (isSettingSourceEnabled('projectSettings') && !skipProject) {
-        const projectPath = join(dir, 'CLAUDE.md')
+        const projectPath = getPreferredProjectInstructionPath(dir)
         result.push(
           ...(await processMemoryFile(
             projectPath,
@@ -895,8 +912,8 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/CLAUDE.md (Project)
-        const dotClaudePath = join(dir, '.claude', 'CLAUDE.md')
+        // Try reading the scoped project instruction file
+        const dotClaudePath = getPreferredScopedProjectInstructionPath(dir)
         result.push(
           ...(await processMemoryFile(
             dotClaudePath,
@@ -906,8 +923,8 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/rules/*.md files (Project)
-        const rulesDir = join(dir, '.claude', 'rules')
+        // Try reading project rules files
+        const rulesDir = getPreferredProjectRulesDir(dir)
         result.push(
           ...(await processMdRules({
             rulesDir,
@@ -921,7 +938,7 @@ export const getMemoryFiles = memoize(
 
       // Try reading CLAUDE.local.md (Local) - only if localSettings is enabled
       if (isSettingSourceEnabled('localSettings')) {
-        const localPath = join(dir, 'CLAUDE.local.md')
+        const localPath = getPreferredLocalInstructionPath(dir)
         result.push(
           ...(await processMemoryFile(
             localPath,
@@ -933,15 +950,17 @@ export const getMemoryFiles = memoize(
       }
     }
 
-    // Process CLAUDE.md from additional directories (--add-dir) if env var is enabled
-    // This is controlled by CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD and defaults to off
+    // Process project instructions from additional directories (--add-dir) if env
+    // vars are enabled. Preferred name:
+    // FORGE_ENABLE_ADDITIONAL_INSTRUCTION_DIRECTORIES. Legacy
+    // CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD remains supported. Defaults to off.
     // Note: we don't check isSettingSourceEnabled('projectSettings') here because --add-dir
     // is an explicit user action and the SDK defaults settingSources to [] when not specified
-    if (isEnvTruthy(process.env.CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD)) {
-      const additionalDirs = getAdditionalDirectoriesForClaudeMd()
+    if (shouldLoadAdditionalInstructionDirectoriesByEnv()) {
+      const additionalDirs = getAdditionalInstructionDirectories()
       for (const dir of additionalDirs) {
-        // Try reading CLAUDE.md from the additional directory
-        const projectPath = join(dir, 'CLAUDE.md')
+        // Try reading the project instruction file from the additional directory.
+        const projectPath = getPreferredProjectInstructionPath(dir)
         result.push(
           ...(await processMemoryFile(
             projectPath,
@@ -951,8 +970,9 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/CLAUDE.md from the additional directory
-        const dotClaudePath = join(dir, '.claude', 'CLAUDE.md')
+        // Try reading the scoped project instruction file from the additional
+        // directory.
+        const dotClaudePath = getPreferredScopedProjectInstructionPath(dir)
         result.push(
           ...(await processMemoryFile(
             dotClaudePath,
@@ -962,8 +982,8 @@ export const getMemoryFiles = memoize(
           )),
         )
 
-        // Try reading .claude/rules/*.md files from the additional directory
-        const rulesDir = join(dir, '.claude', 'rules')
+        // Try reading project rules files from the additional directory
+        const rulesDir = getPreferredProjectRulesDir(dir)
         result.push(
           ...(await processMdRules({
             rulesDir,
@@ -1042,9 +1062,9 @@ export const getMemoryFiles = memoize(
     // Fire InstructionsLoaded hook for each instruction file loaded
     // (fire-and-forget, audit/observability only).
     // AutoMem/TeamMem are intentionally excluded — they're a separate
-    // memory system, not "instructions" in the CLAUDE.md/rules sense.
+    // memory system, not "instructions" in the FORGE.md/rules sense.
     // Gated on !forceIncludeExternal: the forceIncludeExternal=true variant
-    // is only used by getExternalClaudeMdIncludes() for approval checks, not
+    // is only used by getExternalInstructionIncludes() for approval checks, not
     // for building context — firing the hook there would double-fire on startup.
     // The one-shot flag is consumed on every !forceIncludeExternal cache miss
     // (NOT gated on hasInstructionsLoadedHook) so the flag is released even
@@ -1194,6 +1214,8 @@ export const getClaudeMds = (
   return `${MEMORY_INSTRUCTION_PROMPT}\n\n${memories.join('\n\n')}`
 }
 
+export const getInstructionsPrompt = getClaudeMds
+
 /**
  * Gets managed and user conditional rules that match the target path.
  * This is the first phase of nested memory loading.
@@ -1208,12 +1230,12 @@ export async function getManagedAndUserConditionalRules(
 ): Promise<MemoryFileInfo[]> {
   const result: MemoryFileInfo[] = []
 
-  // Process Managed conditional .claude/rules/*.md files
-  const managedClaudeRulesDir = getManagedClaudeRulesDir()
+  // Process managed conditional instruction rules
+  const managedInstructionRulesDir = getManagedInstructionRulesDir()
   result.push(
     ...(await processConditionedMdRules(
       targetPath,
-      managedClaudeRulesDir,
+      managedInstructionRulesDir,
       'Managed',
       processedPaths,
       false,
@@ -1221,12 +1243,12 @@ export async function getManagedAndUserConditionalRules(
   )
 
   if (isSettingSourceEnabled('userSettings')) {
-    // Process User conditional .claude/rules/*.md files
-    const userClaudeRulesDir = getUserClaudeRulesDir()
+    // Process user conditional instruction rules
+    const userInstructionRulesDir = getUserInstructionRulesDir()
     result.push(
       ...(await processConditionedMdRules(
         targetPath,
-        userClaudeRulesDir,
+        userInstructionRulesDir,
         'User',
         processedPaths,
         true,
@@ -1239,7 +1261,8 @@ export async function getManagedAndUserConditionalRules(
 
 /**
  * Gets memory files for a single nested directory (between CWD and target).
- * Loads CLAUDE.md, unconditional rules, and conditional rules for that directory.
+ * Loads instruction files, unconditional rules, and conditional rules for
+ * that directory.
  *
  * @param dir The directory to process
  * @param targetPath The target file path (for conditional rule matching)
@@ -1253,9 +1276,9 @@ export async function getMemoryFilesForNestedDirectory(
 ): Promise<MemoryFileInfo[]> {
   const result: MemoryFileInfo[] = []
 
-  // Process project memory files (CLAUDE.md and .claude/CLAUDE.md)
+  // Process project instruction files
   if (isSettingSourceEnabled('projectSettings')) {
-    const projectPath = join(dir, 'CLAUDE.md')
+    const projectPath = getPreferredProjectInstructionPath(dir)
     result.push(
       ...(await processMemoryFile(
         projectPath,
@@ -1264,7 +1287,7 @@ export async function getMemoryFilesForNestedDirectory(
         false,
       )),
     )
-    const dotClaudePath = join(dir, '.claude', 'CLAUDE.md')
+    const dotClaudePath = getPreferredScopedProjectInstructionPath(dir)
     result.push(
       ...(await processMemoryFile(
         dotClaudePath,
@@ -1277,15 +1300,15 @@ export async function getMemoryFilesForNestedDirectory(
 
   // Process local memory file (CLAUDE.local.md)
   if (isSettingSourceEnabled('localSettings')) {
-    const localPath = join(dir, 'CLAUDE.local.md')
+    const localPath = getPreferredLocalInstructionPath(dir)
     result.push(
       ...(await processMemoryFile(localPath, 'Local', processedPaths, false)),
     )
   }
 
-  const rulesDir = join(dir, '.claude', 'rules')
+  const rulesDir = getPreferredProjectRulesDir(dir)
 
-  // Process project unconditional .claude/rules/*.md files, which were not eagerly loaded
+  // Process project unconditional rules files, which were not eagerly loaded
   // Use a separate processedPaths set to avoid marking conditional rule files as processed
   const unconditionalProcessedPaths = new Set(processedPaths)
   result.push(
@@ -1298,7 +1321,7 @@ export async function getMemoryFilesForNestedDirectory(
     })),
   )
 
-  // Process project conditional .claude/rules/*.md files
+  // Process project conditional rules files
   result.push(
     ...(await processConditionedMdRules(
       targetPath,
@@ -1331,7 +1354,7 @@ export async function getConditionalRulesForCwdLevelDirectory(
   targetPath: string,
   processedPaths: Set<string>,
 ): Promise<MemoryFileInfo[]> {
-  const rulesDir = join(dir, '.claude', 'rules')
+  const rulesDir = getPreferredProjectRulesDir(dir)
   return processConditionedMdRules(
     targetPath,
     rulesDir,
@@ -1342,8 +1365,8 @@ export async function getConditionalRulesForCwdLevelDirectory(
 }
 
 /**
- * Processes all .md files in the .claude/rules/ directory and its subdirectories,
- * filtering to only include files with frontmatter paths that match the target path
+ * Processes all .md files in the rules directory tree, filtering to only
+ * include files with frontmatter paths that match the target path.
  * @param targetPath The file path to match against frontmatter glob patterns
  * @param rulesDir The path to the rules directory
  * @param type Type of memory file (User, Project, Local)
@@ -1372,11 +1395,12 @@ export async function processConditionedMdRules(
       return false
     }
 
-    // For Project rules: glob patterns are relative to the directory containing .claude
+    // For Project rules: glob patterns are relative to the directory containing
+    // .forge or legacy .claude
     // For Managed/User rules: glob patterns are relative to the original CWD
     const baseDir =
       type === 'Project'
-        ? dirname(dirname(rulesDir)) // Parent of .claude
+        ? dirname(dirname(rulesDir)) // Parent of .forge or legacy .claude
         : getOriginalCwd() // Project root for managed/user rules
 
     const relativePath = isAbsolute(targetPath)
@@ -1396,15 +1420,17 @@ export async function processConditionedMdRules(
   })
 }
 
-export type ExternalClaudeMdInclude = {
+export type ExternalInstructionInclude = {
   path: string
   parent: string
 }
 
-export function getExternalClaudeMdIncludes(
+export type ExternalClaudeMdInclude = ExternalInstructionInclude
+
+export function getExternalInstructionIncludes(
   files: MemoryFileInfo[],
-): ExternalClaudeMdInclude[] {
-  const externals: ExternalClaudeMdInclude[] = []
+): ExternalInstructionInclude[] {
+  const externals: ExternalInstructionInclude[] = []
   for (const file of files) {
     if (file.type !== 'User' && file.parent && !pathInOriginalCwd(file.path)) {
       externals.push({ path: file.path, parent: file.parent })
@@ -1413,37 +1439,48 @@ export function getExternalClaudeMdIncludes(
   return externals
 }
 
-export function hasExternalClaudeMdIncludes(files: MemoryFileInfo[]): boolean {
-  return getExternalClaudeMdIncludes(files).length > 0
+export const getExternalClaudeMdIncludes = getExternalInstructionIncludes
+
+export function hasExternalInstructionIncludes(
+  files: MemoryFileInfo[],
+): boolean {
+  return getExternalInstructionIncludes(files).length > 0
 }
 
-export async function shouldShowClaudeMdExternalIncludesWarning(): Promise<boolean> {
+export const hasExternalClaudeMdIncludes = hasExternalInstructionIncludes
+
+export async function shouldShowInstructionExternalIncludesWarning(): Promise<boolean> {
   const config = getCurrentProjectConfig()
   if (
-    config.hasClaudeMdExternalIncludesApproved ||
-    config.hasClaudeMdExternalIncludesWarningShown
+    hasInstructionExternalIncludesApproved(config) ||
+    hasInstructionExternalIncludesWarningShown(config)
   ) {
     return false
   }
 
-  return hasExternalClaudeMdIncludes(await getMemoryFiles(true))
+  return hasExternalInstructionIncludes(await getMemoryFiles(true))
 }
 
+export const shouldShowClaudeMdExternalIncludesWarning =
+  shouldShowInstructionExternalIncludesWarning
+
 /**
- * Check if a file path is a memory file (CLAUDE.md, CLAUDE.local.md, or .claude/rules/*.md)
+ * Check if a file path is an instruction file (FORGE.md, FORGE.local.md,
+ * .forge/rules/*.md, or legacy CLAUDE.md / .claude rules files).
  */
 export function isMemoryFilePath(filePath: string): boolean {
   const name = basename(filePath)
 
-  // CLAUDE.md or CLAUDE.local.md anywhere
-  if (name === 'CLAUDE.md' || name === 'CLAUDE.local.md') {
+  // FORGE.md / FORGE.local.md and legacy CLAUDE.md / CLAUDE.local.md anywhere
+  if (isInstructionFileBasename(name)) {
     return true
   }
 
-  // .md files in .claude/rules/ directories
+  // .md files in .forge/rules/ or legacy .claude/rules/ directories
   if (
     name.endsWith('.md') &&
-    filePath.includes(`${sep}.claude${sep}rules${sep}`)
+    (filePath.includes(`${sep}.forge${sep}rules${sep}`) ||
+      filePath.includes(`${sep}.claude${sep}rules${sep}`))
   ) {
     return true
   }

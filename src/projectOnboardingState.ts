@@ -1,12 +1,11 @@
 import memoize from 'lodash-es/memoize.js'
-import { join } from 'path'
 import {
   getCurrentProjectConfig,
   saveCurrentProjectConfig,
 } from './utils/config.js'
 import { getCwd } from './utils/cwd.js'
 import { isDirEmpty } from './utils/file.js'
-import { getFsImplementation } from './utils/fsOperations.js'
+import { hasAnyProjectInstructionFile } from './utils/forgePaths.js'
 
 export type Step = {
   key: string
@@ -17,23 +16,21 @@ export type Step = {
 }
 
 export function getSteps(): Step[] {
-  const hasClaudeMd = getFsImplementation().existsSync(
-    join(getCwd(), 'CLAUDE.md'),
-  )
+  const hasInstructionsFile = hasAnyProjectInstructionFile(getCwd())
   const isWorkspaceDirEmpty = isDirEmpty(getCwd())
 
   return [
     {
       key: 'workspace',
-      text: 'Ask Claude to create a new app or clone a repository',
+      text: 'Ask Forge to create a new app or clone a repository',
       isComplete: false,
       isCompletable: true,
       isEnabled: isWorkspaceDirEmpty,
     },
     {
       key: 'claudemd',
-      text: 'Run /init to create a CLAUDE.md file with instructions for Claude',
-      isComplete: hasClaudeMd,
+      text: 'Run /init to create a FORGE.md file with instructions for Forge',
+      isComplete: hasInstructionsFile,
       isCompletable: true,
       isEnabled: !isWorkspaceDirEmpty,
     },

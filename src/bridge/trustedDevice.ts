@@ -1,11 +1,14 @@
 import axios from 'axios'
 import memoize from 'lodash-es/memoize.js'
 import { hostname } from 'os'
-import { getOauthConfig } from '../constants/oauth.js'
 import {
   checkGate_CACHED_OR_BLOCKING,
   getFeatureValue_CACHED_MAY_BE_STALE,
 } from '../services/analytics/growthbook.js'
+import {
+  getActiveForgeSession,
+  requireAuthenticatedApiBaseUrl,
+} from '../services/auth/runtime.js'
 import { logForDebugging } from '../utils/debug.js'
 import { errorMessage } from '../utils/errors.js'
 import { isEssentialTrafficOnly } from '../utils/privacyLevel.js'
@@ -122,7 +125,9 @@ export async function enrollTrustedDevice(): Promise<void> {
     const { getClaudeAIOAuthTokens } =
       require('../utils/auth.js') as typeof import('../utils/auth.js')
     /* eslint-enable @typescript-eslint/no-require-imports */
-    const accessToken = getClaudeAIOAuthTokens()?.accessToken
+    const accessToken =
+      getActiveForgeSession()?.accessToken ??
+      getClaudeAIOAuthTokens()?.accessToken
     if (!accessToken) {
       logForDebugging('[trusted-device] No OAuth token, skipping enrollment')
       return
@@ -139,7 +144,7 @@ export async function enrollTrustedDevice(): Promise<void> {
       return
     }
 
-    const baseUrl = getOauthConfig().BASE_API_URL
+    const baseUrl = requireAuthenticatedApiBaseUrl()
     let response
     try {
       response = await axios.post<{
@@ -147,7 +152,7 @@ export async function enrollTrustedDevice(): Promise<void> {
         device_id?: string
       }>(
         `${baseUrl}/api/auth/trusted_devices`,
-        { display_name: `Claude Code on ${hostname()} · ${process.platform}` },
+        { display_name: `Forge on ${hostname()} · ${process.platform}` },
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,

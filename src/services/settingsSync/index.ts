@@ -1,7 +1,7 @@
 /**
  * Settings Sync Service
  *
- * Syncs user settings and memory files across Claude Code environments.
+ * Syncs user settings and memory files across Forge environments.
  *
  * - Interactive CLI: Uploads local settings to remote (incremental, only changed entries)
  * - CCR: Downloads remote settings to local before plugin installation
@@ -17,14 +17,13 @@ import { dirname } from 'path'
 import { getIsInteractive } from '../../bootstrap/state.js'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
-  getOauthConfig,
   OAUTH_BETA_HEADER,
 } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getClaudeAIOAuthTokens,
 } from '../../utils/auth.js'
-import { clearMemoryFileCaches } from '../../utils/claudemd.js'
+import { clearMemoryFileCaches } from '../../utils/instructions.js'
 import { getMemoryPath } from '../../utils/config.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
 import { classifyAxiosError } from '../../utils/errors.js'
@@ -41,6 +40,12 @@ import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
 import { logEvent } from '../analytics/index.js'
 import { getRetryDelay } from '../api/withRetry.js'
+import {
+  getActiveForgeSession,
+  isUsingBrokeredForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from '../auth/runtime.js'
 import {
   type SettingsSyncFetchResult,
   type SettingsSyncUploadResult,
@@ -210,7 +215,19 @@ async function doDownloadUserSettings(
  * download a no-op there. Upload is independently guarded by getIsInteractive().
  */
 function isUsingOAuth(): boolean {
-  if (getAPIProvider() !== 'firstParty' || !isFirstPartyAnthropicBaseUrl()) {
+  if (getAPIProvider() !== 'firstParty') {
+    return false
+  }
+
+  if (isUsingNativeOpenAISession()) {
+    return false
+  }
+
+  if (isUsingBrokeredForgeSession()) {
+    return true
+  }
+
+  if (!isFirstPartyAnthropicBaseUrl()) {
     return false
   }
 
@@ -221,13 +238,32 @@ function isUsingOAuth(): boolean {
 }
 
 function getSettingsSyncEndpoint(): string {
-  return `${getOauthConfig().BASE_API_URL}/api/claude_code/user_settings`
+  return `${requireAuthenticatedApiBaseUrl()}/api/claude_code/user_settings`
 }
 
 function getSettingsSyncAuthHeaders(): {
   headers: Record<string, string>
   error?: string
 } {
+  if (isUsingNativeOpenAISession()) {
+    return {
+      headers: {},
+      error:
+        'Native OpenAI sessions do not use Forge or Anthropic settings sync endpoints.',
+    }
+  }
+
+  const forgeSession = isUsingBrokeredForgeSession()
+    ? getActiveForgeSession()
+    : null
+  if (forgeSession?.accessToken) {
+    return {
+      headers: {
+        Authorization: `Bearer ${forgeSession.accessToken}`,
+      },
+    }
+  }
+
   const oauthTokens = getClaudeAIOAuthTokens()
   if (oauthTokens?.accessToken) {
     return {
@@ -246,7 +282,9 @@ function getSettingsSyncAuthHeaders(): {
 
 async function fetchUserSettingsOnce(): Promise<SettingsSyncFetchResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const authHeaders = getSettingsSyncAuthHeaders()
     if (authHeaders.error) {
@@ -348,7 +386,9 @@ async function uploadUserSettings(
   entries: Record<string, string>,
 ): Promise<SettingsSyncUploadResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const authHeaders = getSettingsSyncAuthHeaders()
     if (authHeaders.error) {

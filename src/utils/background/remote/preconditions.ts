@@ -1,10 +1,7 @@
 import axios from 'axios'
-import { getOauthConfig } from 'src/constants/oauth.js'
-import { getOrganizationUUID } from 'src/services/oauth/client.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../../services/analytics/growthbook.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
-  getClaudeAIOAuthTokens,
   isClaudeAISubscriber,
 } from '../../auth.js'
 import { getCwd } from '../../cwd.js'
@@ -12,7 +9,7 @@ import { logForDebugging } from '../../debug.js'
 import { detectCurrentRepository } from '../../detectRepository.js'
 import { errorMessage } from '../../errors.js'
 import { findGitRoot, getIsClean } from '../../git.js'
-import { getOAuthHeaders } from '../../teleport/api.js'
+import { getOAuthHeaders, prepareApiRequest } from '../../teleport/api.js'
 import { fetchEnvironments } from '../../teleport/environments.js'
 
 /**
@@ -81,23 +78,8 @@ export async function checkGithubAppInstalled(
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
-    const accessToken = getClaudeAIOAuthTokens()?.accessToken
-    if (!accessToken) {
-      logForDebugging(
-        'checkGithubAppInstalled: No access token found, assuming app not installed',
-      )
-      return false
-    }
-
-    const orgUUID = await getOrganizationUUID()
-    if (!orgUUID) {
-      logForDebugging(
-        'checkGithubAppInstalled: No org UUID found, assuming app not installed',
-      )
-      return false
-    }
-
-    const url = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/code/repos/${owner}/${repo}`
+    const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
+    const url = `${baseUrl}/api/oauth/organizations/${orgUUID}/code/repos/${owner}/${repo}`
     const headers = {
       ...getOAuthHeaders(accessToken),
       'x-organization-uuid': orgUUID,
@@ -163,19 +145,8 @@ export async function checkGithubAppInstalled(
  */
 export async function checkGithubTokenSynced(): Promise<boolean> {
   try {
-    const accessToken = getClaudeAIOAuthTokens()?.accessToken
-    if (!accessToken) {
-      logForDebugging('checkGithubTokenSynced: No access token found')
-      return false
-    }
-
-    const orgUUID = await getOrganizationUUID()
-    if (!orgUUID) {
-      logForDebugging('checkGithubTokenSynced: No org UUID found')
-      return false
-    }
-
-    const url = `${getOauthConfig().BASE_API_URL}/api/oauth/organizations/${orgUUID}/sync/github/auth`
+    const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
+    const url = `${baseUrl}/api/oauth/organizations/${orgUUID}/sync/github/auth`
     const headers = {
       ...getOAuthHeaders(accessToken),
       'x-organization-uuid': orgUUID,

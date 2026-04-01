@@ -1,280 +1,180 @@
-# Claude Code Source Snapshot for Security Research
+# Forge
 
-> This repository mirrors a **publicly exposed Claude Code source snapshot** that became accessible on **March 31, 2026** through a source map exposure in the npm distribution. It is maintained for **educational, defensive security research, and software supply-chain analysis**.
+Forge is a locally recovered and reworked CLI fork built from a public source
+snapshot of Anthropic's Claude Code. This repository is not an official
+Anthropic project. In its current state, it is a runnable terminal coding
+assistant with a working CLI, REPL startup, non-interactive `--print` mode, and
+two authentication paths:
 
----
+- existing first-party `claude.ai` style login, if present in local config
+- GPT/OpenAI login imported from official Codex CLI
 
-## Research Context
+The repository has moved beyond "snapshot analysis only". The main product path
+now boots and can execute real requests.
 
-This repository is maintained by a **university student** studying:
+## Current status
 
-- software supply-chain exposure and build artifact leaks
-- secure software engineering practices
-- agentic developer tooling architecture
-- defensive analysis of real-world CLI systems
+Verified locally:
 
-This archive is intended to support:
+- `bash scripts/run-forge-cli.sh --version`
+- `bash scripts/run-forge-cli.sh --help`
+- `bash scripts/run-forge-cli.sh auth status`
+- `bash scripts/run-forge-cli.sh --print "Reply with the single word OK." --disable-slash-commands --tools "" --max-turns 1`
+- `bash scripts/run-forge-cli.sh auth login --openai` using Codex CLI login reuse
 
-- educational study
-- security research practice
-- architecture review
-- discussion of packaging and release-process failures
+The recovery audit also passes:
 
-It does **not** claim ownership of the original code, and it should not be interpreted as an official Anthropic repository.
-
----
-
-## How the Public Snapshot Became Accessible
-
-[Chaofan Shou (@Fried_rice)](https://x.com/Fried_rice) publicly noted that Claude Code source material was reachable through a `.map` file exposed in the npm package:
-
-> **"Claude code source code has been leaked via a map file in their npm registry!"**
->
-> — [@Fried_rice, March 31, 2026](https://x.com/Fried_rice/status/2038894956459290963)
-
-The published source map referenced unobfuscated TypeScript sources hosted in Anthropic's R2 storage bucket, which made the `src/` snapshot publicly downloadable.
-
----
-
-## Repository Scope
-
-Claude Code is Anthropic's CLI for interacting with Claude from the terminal to perform software engineering tasks such as editing files, running commands, searching codebases, and coordinating workflows.
-
-This repository contains a mirrored `src/` snapshot for research and analysis.
-
-- **Public exposure identified on**: 2026-03-31
-- **Language**: TypeScript
-- **Runtime**: Bun
-- **Terminal UI**: React + [Ink](https://github.com/vadimdemedes/ink)
-- **Scale**: ~1,900 files, 512,000+ lines of code
-
----
-
-## Directory Structure
-
-```text
-src/
-├── main.tsx                 # Entrypoint orchestration (Commander.js-based CLI path)
-├── commands.ts              # Command registry
-├── tools.ts                 # Tool registry
-├── Tool.ts                  # Tool type definitions
-├── QueryEngine.ts           # LLM query engine
-├── context.ts               # System/user context collection
-├── cost-tracker.ts          # Token cost tracking
-│
-├── commands/                # Slash command implementations (~50)
-├── tools/                   # Agent tool implementations (~40)
-├── components/              # Ink UI components (~140)
-├── hooks/                   # React hooks
-├── services/                # External service integrations
-├── screens/                 # Full-screen UIs (Doctor, REPL, Resume)
-├── types/                   # TypeScript type definitions
-├── utils/                   # Utility functions
-│
-├── bridge/                  # IDE and remote-control bridge
-├── coordinator/             # Multi-agent coordinator
-├── plugins/                 # Plugin system
-├── skills/                  # Skill system
-├── keybindings/             # Keybinding configuration
-├── vim/                     # Vim mode
-├── voice/                   # Voice input
-├── remote/                  # Remote sessions
-├── server/                  # Server mode
-├── memdir/                  # Persistent memory directory
-├── tasks/                   # Task management
-├── state/                   # State management
-├── migrations/              # Config migrations
-├── schemas/                 # Config schemas (Zod)
-├── entrypoints/             # Initialization logic
-├── ink/                     # Ink renderer wrapper
-├── buddy/                   # Companion sprite
-├── native-ts/               # Native TypeScript utilities
-├── outputStyles/            # Output styling
-├── query/                   # Query pipeline
-└── upstreamproxy/           # Proxy configuration
+```bash
+node scripts/recovery-audit.mjs
 ```
 
----
+What is solid now:
 
-## Architecture Summary
+- Bun-based CLI startup
+- generated SDK/settings artifacts
+- local launcher script
+- basic interactive startup
+- non-interactive request path
+- Codex CLI based OpenAI login import
 
-### 1. Tool System (`src/tools/`)
+What is still partial:
 
-Every tool Claude Code can invoke is implemented as a self-contained module. Each tool defines its input schema, permission model, and execution logic.
+- the native OpenAI path is not feature-complete for all tool/multi-turn cases
+- if Codex only exposes a ChatGPT OAuth token without `api.responses.write`,
+  Forge falls back to `codex exec` for simple no-tool text requests
+- some historical Anthropic-specific integrations remain in compatibility
+  boundaries
 
-| Tool | Description |
-|---|---|
-| `BashTool` | Shell command execution |
-| `FileReadTool` | File reading (images, PDFs, notebooks) |
-| `FileWriteTool` | File creation / overwrite |
-| `FileEditTool` | Partial file modification (string replacement) |
-| `GlobTool` | File pattern matching search |
-| `GrepTool` | ripgrep-based content search |
-| `WebFetchTool` | Fetch URL content |
-| `WebSearchTool` | Web search |
-| `AgentTool` | Sub-agent spawning |
-| `SkillTool` | Skill execution |
-| `MCPTool` | MCP server tool invocation |
-| `LSPTool` | Language Server Protocol integration |
-| `NotebookEditTool` | Jupyter notebook editing |
-| `TaskCreateTool` / `TaskUpdateTool` | Task creation and management |
-| `SendMessageTool` | Inter-agent messaging |
-| `TeamCreateTool` / `TeamDeleteTool` | Team agent management |
-| `EnterPlanModeTool` / `ExitPlanModeTool` | Plan mode toggle |
-| `EnterWorktreeTool` / `ExitWorktreeTool` | Git worktree isolation |
-| `ToolSearchTool` | Deferred tool discovery |
-| `CronCreateTool` | Scheduled trigger creation |
-| `RemoteTriggerTool` | Remote trigger |
-| `SleepTool` | Proactive mode wait |
-| `SyntheticOutputTool` | Structured output generation |
+## Quick start
 
-### 2. Command System (`src/commands/`)
+### 1. Install dependencies
 
-User-facing slash commands invoked with `/` prefix.
-
-| Command | Description |
-|---|---|
-| `/commit` | Create a git commit |
-| `/review` | Code review |
-| `/compact` | Context compression |
-| `/mcp` | MCP server management |
-| `/config` | Settings management |
-| `/doctor` | Environment diagnostics |
-| `/login` / `/logout` | Authentication |
-| `/memory` | Persistent memory management |
-| `/skills` | Skill management |
-| `/tasks` | Task management |
-| `/vim` | Vim mode toggle |
-| `/diff` | View changes |
-| `/cost` | Check usage cost |
-| `/theme` | Change theme |
-| `/context` | Context visualization |
-| `/pr_comments` | View PR comments |
-| `/resume` | Restore previous session |
-| `/share` | Share session |
-| `/desktop` | Desktop app handoff |
-| `/mobile` | Mobile app handoff |
-
-### 3. Service Layer (`src/services/`)
-
-| Service | Description |
-|---|---|
-| `api/` | Anthropic API client, file API, bootstrap |
-| `mcp/` | Model Context Protocol server connection and management |
-| `oauth/` | OAuth 2.0 authentication flow |
-| `lsp/` | Language Server Protocol manager |
-| `analytics/` | GrowthBook-based feature flags and analytics |
-| `plugins/` | Plugin loader |
-| `compact/` | Conversation context compression |
-| `policyLimits/` | Organization policy limits |
-| `remoteManagedSettings/` | Remote managed settings |
-| `extractMemories/` | Automatic memory extraction |
-| `tokenEstimation.ts` | Token count estimation |
-| `teamMemorySync/` | Team memory synchronization |
-
-### 4. Bridge System (`src/bridge/`)
-
-A bidirectional communication layer connecting IDE extensions (VS Code, JetBrains) with the Claude Code CLI.
-
-- `bridgeMain.ts` — Bridge main loop
-- `bridgeMessaging.ts` — Message protocol
-- `bridgePermissionCallbacks.ts` — Permission callbacks
-- `replBridge.ts` — REPL session bridge
-- `jwtUtils.ts` — JWT-based authentication
-- `sessionRunner.ts` — Session execution management
-
-### 5. Permission System (`src/hooks/toolPermission/`)
-
-Checks permissions on every tool invocation. Either prompts the user for approval/denial or automatically resolves based on the configured permission mode (`default`, `plan`, `bypassPermissions`, `auto`, etc.).
-
-### 6. Feature Flags
-
-Dead code elimination via Bun's `bun:bundle` feature flags:
-
-```typescript
-import { feature } from 'bun:bundle'
-
-// Inactive code is completely stripped at build time
-const voiceCommand = feature('VOICE_MODE')
-  ? require('./commands/voice/index.js').default
-  : null
+```bash
+bun install
 ```
 
-Notable flags: `PROACTIVE`, `KAIROS`, `BRIDGE_MODE`, `DAEMON`, `VOICE_MODE`, `AGENT_TRIGGERS`, `MONITOR_TOOL`
+### 2. Generate derived files
 
----
-
-## Key Files in Detail
-
-### `QueryEngine.ts` (~46K lines)
-
-The core engine for LLM API calls. Handles streaming responses, tool-call loops, thinking mode, retry logic, and token counting.
-
-### `Tool.ts` (~29K lines)
-
-Defines base types and interfaces for all tools — input schemas, permission models, and progress state types.
-
-### `commands.ts` (~25K lines)
-
-Manages registration and execution of all slash commands. Uses conditional imports to load different command sets per environment.
-
-### `main.tsx`
-
-Commander.js-based CLI parser and React/Ink renderer initialization. At startup, it overlaps MDM settings, keychain prefetch, and GrowthBook initialization for faster boot.
-
----
-
-## Tech Stack
-
-| Category | Technology |
-|---|---|
-| Runtime | [Bun](https://bun.sh) |
-| Language | TypeScript (strict) |
-| Terminal UI | [React](https://react.dev) + [Ink](https://github.com/vadimdemedes/ink) |
-| CLI Parsing | [Commander.js](https://github.com/tj/commander.js) (extra-typings) |
-| Schema Validation | [Zod v4](https://zod.dev) |
-| Code Search | [ripgrep](https://github.com/BurntSushi/ripgrep) |
-| Protocols | [MCP SDK](https://modelcontextprotocol.io), LSP |
-| API | [Anthropic SDK](https://docs.anthropic.com) |
-| Telemetry | OpenTelemetry + gRPC |
-| Feature Flags | GrowthBook |
-| Auth | OAuth 2.0, JWT, macOS Keychain |
-
----
-
-## Notable Design Patterns
-
-### Parallel Prefetch
-
-Startup time is optimized by prefetching MDM settings, keychain reads, and API preconnect in parallel before heavy module evaluation begins.
-
-```typescript
-// main.tsx — fired as side-effects before other imports
-startMdmRawRead()
-startKeychainPrefetch()
+```bash
+bun run generate
 ```
 
-### Lazy Loading
+### 3. Start Forge
 
-Heavy modules (OpenTelemetry, gRPC, analytics, and some feature-gated subsystems) are deferred via dynamic `import()` until actually needed.
+Canonical launcher:
 
-### Agent Swarms
+```bash
+bash scripts/run-forge-cli.sh
+```
 
-Sub-agents are spawned via `AgentTool`, with `coordinator/` handling multi-agent orchestration. `TeamCreateTool` enables team-level parallel work.
+Useful checks:
 
-### Skill System
+```bash
+bash scripts/run-forge-cli.sh --version
+bash scripts/run-forge-cli.sh --help
+bash scripts/run-forge-cli.sh auth status
+```
 
-Reusable workflows defined in `skills/` are executed through `SkillTool`. Users can add custom skills.
+Non-interactive smoke test:
 
-### Plugin Architecture
+```bash
+bash scripts/run-forge-cli.sh --print "Reply with the single word OK." --disable-slash-commands --tools "" --max-turns 1
+```
 
-Built-in and third-party plugins are loaded through the `plugins/` subsystem.
+You can also use package scripts:
 
----
+```bash
+bun run cli
+bun run version
+bun run recovery:audit
+bun run preflight:openai
+```
 
-## Research / Ownership Disclaimer
+## Authentication
 
-- This repository is an **educational and defensive security research archive** maintained by a university student.
-- It exists to study source exposure, packaging failures, and the architecture of modern agentic CLI systems.
-- The original Claude Code source remains the property of **Anthropic**.
-- This repository is **not affiliated with, endorsed by, or maintained by Anthropic**.
+### OpenAI / GPT via Codex CLI
+
+This is the preferred OpenAI path.
+
+1. Sign in with official Codex CLI:
+
+```bash
+codex login
+codex login status
+```
+
+2. Import that login into Forge:
+
+```bash
+bash scripts/run-forge-cli.sh auth login --openai
+```
+
+3. Verify:
+
+```bash
+bash scripts/run-forge-cli.sh auth status
+```
+
+If the imported Codex credential includes a usable API key or Responses scope,
+Forge can use the native OpenAI runtime directly. If not, Forge still imports
+the login and can run simple no-tool text requests through a `codex exec`
+fallback.
+
+Detailed validation steps are in
+[docs/openai-oauth-smoke-test.md](/home/ubuntu/claude-code/docs/openai-oauth-smoke-test.md).
+
+### Existing first-party login
+
+If your local config already contains the legacy first-party login state, Forge
+will continue to read it through the compatibility layer. This repository still
+contains that path for local continuity, but it is no longer the only way to
+start the product.
+
+## Architecture summary
+
+This codebase is still a large modular CLI monolith. The important top-level
+areas are:
+
+- [`src/entrypoints/cli.tsx`](/home/ubuntu/claude-code/src/entrypoints/cli.tsx): CLI entrypoint
+- [`src/main.tsx`](/home/ubuntu/claude-code/src/main.tsx): startup orchestration and mode routing
+- [`src/cli/print.ts`](/home/ubuntu/claude-code/src/cli/print.ts): non-interactive/headless execution
+- [`src/QueryEngine.ts`](/home/ubuntu/claude-code/src/QueryEngine.ts): query loop
+- [`src/services/api/claude.ts`](/home/ubuntu/claude-code/src/services/api/claude.ts): model dispatch
+- [`src/services/api/openai.ts`](/home/ubuntu/claude-code/src/services/api/openai.ts): native OpenAI path plus Codex fallback
+- [`src/tools.ts`](/home/ubuntu/claude-code/src/tools.ts): built-in tool registry
+- [`src/commands.ts`](/home/ubuntu/claude-code/src/commands.ts): command registry
+
+High-level subsystem layout:
+
+- `src/commands/`: slash/CLI commands
+- `src/tools/`: tool implementations
+- `src/components/` and `src/screens/`: Ink UI
+- `src/services/`: API, auth, MCP, analytics, sync, compact
+- `src/utils/`: pathing, config, permissions, session storage, adapters
+- `src/bridge/`: IDE/remote bridge
+- `src/skills/` and `src/plugins/`: extensibility
+
+## Documentation map
+
+- [Usage guide](/home/ubuntu/claude-code/docs/usage.md)
+- [OpenAI OAuth smoke test](/home/ubuntu/claude-code/docs/openai-oauth-smoke-test.md)
+- [Recovery and evolution roadmap](/home/ubuntu/claude-code/docs/recovery-roadmap.md)
+- [Forge design note](/home/ubuntu/claude-code/docs/superpowers/specs/2026-04-01-forge-design.md)
+
+## Reality-based limitations
+
+- This repository was reconstructed from a public source snapshot and then
+  heavily adapted locally.
+- Some module names, compatibility layers, and internal abstractions still
+  reflect Claude/Anthropic heritage.
+- OpenAI support is now real, but not all advanced paths are native OpenAI yet.
+- A few features are best understood as "publicly runnable recovery build"
+  rather than polished release product.
+
+## Recommended next work
+
+1. Expand OpenAI runtime coverage beyond simple no-tool requests.
+2. Reduce remaining Anthropic-specific compatibility naming in public surfaces.
+3. Tighten build metadata injection so `run-forge-cli.sh` is no longer the only
+   supported launcher.
+4. Add repeatable regression checks for REPL, `--print`, auth, and tool basics.

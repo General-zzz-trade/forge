@@ -1,4 +1,5 @@
-// Scheduled prompts, stored in <project>/.claude/scheduled_tasks.json.
+// Scheduled prompts, stored in <project>/.forge/scheduled_tasks.json with
+// legacy .claude/scheduled_tasks.json compatibility.
 //
 // Tasks come in two flavors:
 //   - One-shot (recurring: false/undefined) — fire once, then auto-delete.
@@ -12,7 +13,7 @@
 import { randomUUID } from 'crypto'
 import { readFileSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import {
   addSessionCronTask,
   getProjectRoot,
@@ -23,6 +24,10 @@ import { computeNextCronRun, parseCronExpression } from './cron.js'
 import { logForDebugging } from './debug.js'
 import { isFsInaccessible } from './errors.js'
 import { getFsImplementation } from './fsOperations.js'
+import {
+  FORGE_PROJECT_CONFIG_DIRNAME,
+  LEGACY_CLAUDE_PROJECT_CONFIG_DIRNAME,
+} from './forgePaths.js'
 import { safeParseJSON } from './json.js'
 import { logError } from './log.js'
 import { jsonStringify } from './slowOperations.js'
@@ -71,7 +76,12 @@ export type CronTask = {
 
 type CronFile = { tasks: CronTask[] }
 
-const CRON_FILE_REL = join('.claude', 'scheduled_tasks.json')
+function getCronFilePathCandidates(root: string): [string, string] {
+  return [
+    join(root, FORGE_PROJECT_CONFIG_DIRNAME, 'scheduled_tasks.json'),
+    join(root, LEGACY_CLAUDE_PROJECT_CONFIG_DIRNAME, 'scheduled_tasks.json'),
+  ]
+}
 
 /**
  * Path to the cron file. `dir` defaults to getProjectRoot() — pass it
@@ -79,14 +89,23 @@ const CRON_FILE_REL = join('.claude', 'scheduled_tasks.json')
  * SDK daemon, which has no bootstrap state).
  */
 export function getCronFilePath(dir?: string): string {
-  return join(dir ?? getProjectRoot(), CRON_FILE_REL)
+  const root = dir ?? getProjectRoot()
+  const [preferredPath, legacyPath] = getCronFilePathCandidates(root)
+  const fs = getFsImplementation()
+  if (fs.existsSync(preferredPath)) {
+    return preferredPath
+  }
+  if (fs.existsSync(legacyPath)) {
+    return legacyPath
+  }
+  return preferredPath
 }
 
 /**
- * Read and parse .claude/scheduled_tasks.json. Returns an empty task list if the file
- * is missing, empty, or malformed. Tasks with invalid cron strings are
- * silently dropped (logged at debug level) so a single bad entry never
- * blocks the whole file.
+ * Read and parse .forge/scheduled_tasks.json (with legacy .claude fallback).
+ * Returns an empty task list if the file is missing, empty, or malformed.
+ * Tasks with invalid cron strings are silently dropped (logged at debug
+ * level) so a single bad entry never blocks the whole file.
  */
 export async function readCronTasks(dir?: string): Promise<CronTask[]> {
   const fs = getFsImplementation()
@@ -158,16 +177,18 @@ export function hasCronTasksSync(dir?: string): boolean {
 }
 
 /**
- * Overwrite .claude/scheduled_tasks.json with the given tasks. Creates .claude/ if
- * missing. Empty task list writes an empty file (rather than deleting) so
- * the file watcher sees a change event on last-task-removed.
+ * Overwrite .forge/scheduled_tasks.json (or the legacy .claude location when
+ * it already exists) with the given tasks. Empty task list writes an empty
+ * file rather than deleting it so the file watcher sees a change event on
+ * last-task-removed.
  */
 export async function writeCronTasks(
   tasks: CronTask[],
   dir?: string,
 ): Promise<void> {
   const root = dir ?? getProjectRoot()
-  await mkdir(join(root, '.claude'), { recursive: true })
+  const cronFilePath = getCronFilePath(root)
+  await mkdir(dirname(cronFilePath), { recursive: true })
   // Strip the runtime-only `durable` flag — everything on disk is durable
   // by definition, and keeping the flag out means readCronTasks() naturally
   // yields durable: undefined without having to set it explicitly.
@@ -175,7 +196,7 @@ export async function writeCronTasks(
     tasks: tasks.map(({ durable: _durable, ...rest }) => rest),
   }
   await writeFile(
-    getCronFilePath(root),
+    cronFilePath,
     jsonStringify(body, null, 2) + '\n',
     'utf-8',
   )
@@ -187,9 +208,9 @@ export async function writeCronTasks(
  *
  * When `durable` is false the task is held in process memory only
  * (bootstrap/state.ts) — it fires on schedule this session but is never
- * written to .claude/scheduled_tasks.json and dies with the process. The
- * scheduler merges session tasks into its tick loop directly, so no file
- * change event is needed.
+ * written to .forge/scheduled_tasks.json (with legacy .claude compatibility)
+ * and dies with the process. The scheduler merges session tasks into its tick
+ * loop directly, so no file change event is needed.
  */
 export async function addCronTask(
   cron: string,

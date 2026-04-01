@@ -31,7 +31,6 @@ import { join, relative, sep } from 'path'
 import {
   CLAUDE_AI_INFERENCE_SCOPE,
   CLAUDE_AI_PROFILE_SCOPE,
-  getOauthConfig,
   OAUTH_BETA_HEADER,
 } from '../../constants/oauth.js'
 import {
@@ -57,6 +56,12 @@ import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { logEvent } from '../analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../analytics/metadata.js'
 import { getRetryDelay } from '../api/withRetry.js'
+import {
+  getActiveForgeSession,
+  isUsingBrokeredForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from '../auth/runtime.js'
 import { scanForSecrets } from './secretScanner.js'
 import {
   type SkippedSecretFile,
@@ -149,7 +154,16 @@ function isErrnoException(e: unknown): e is NodeJS.ErrnoException {
  * Check if user is authenticated with first-party OAuth (required for team memory sync).
  */
 function isUsingOAuth(): boolean {
-  if (getAPIProvider() !== 'firstParty' || !isFirstPartyAnthropicBaseUrl()) {
+  if (getAPIProvider() !== 'firstParty') {
+    return false
+  }
+  if (isUsingNativeOpenAISession()) {
+    return false
+  }
+  if (isUsingBrokeredForgeSession()) {
+    return true
+  }
+  if (!isFirstPartyAnthropicBaseUrl()) {
     return false
   }
   const tokens = getClaudeAIOAuthTokens()
@@ -162,7 +176,7 @@ function isUsingOAuth(): boolean {
 
 function getTeamMemorySyncEndpoint(repoSlug: string): string {
   const baseUrl =
-    process.env.TEAM_MEMORY_SYNC_URL || getOauthConfig().BASE_API_URL
+    process.env.TEAM_MEMORY_SYNC_URL || requireAuthenticatedApiBaseUrl()
   return `${baseUrl}/api/claude_code/team_memory?repo=${encodeURIComponent(repoSlug)}`
 }
 
@@ -170,6 +184,25 @@ function getAuthHeaders(): {
   headers?: Record<string, string>
   error?: string
 } {
+  if (isUsingNativeOpenAISession()) {
+    return {
+      error:
+        'Native OpenAI sessions do not use Forge or Anthropic team memory sync endpoints.',
+    }
+  }
+
+  const forgeSession = isUsingBrokeredForgeSession()
+    ? getActiveForgeSession()
+    : null
+  if (forgeSession?.accessToken) {
+    return {
+      headers: {
+        Authorization: `Bearer ${forgeSession.accessToken}`,
+        'User-Agent': getClaudeCodeUserAgent(),
+      },
+    }
+  }
+
   const oauthTokens = getClaudeAIOAuthTokens()
   if (oauthTokens?.accessToken) {
     return {
@@ -191,7 +224,9 @@ async function fetchTeamMemoryOnce(
   etag?: string | null,
 ): Promise<TeamMemorySyncFetchResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const auth = getAuthHeaders()
     if (auth.error) {
@@ -317,7 +352,9 @@ async function fetchTeamMemoryHashes(
   repoSlug: string,
 ): Promise<TeamMemoryHashesResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
     const auth = getAuthHeaders()
     if (auth.error) {
       return { success: false, error: auth.error, errorType: 'auth' }
@@ -466,7 +503,9 @@ async function uploadTeamMemory(
   ifMatchChecksum?: string | null,
 ): Promise<TeamMemorySyncUploadResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const auth = getAuthHeaders()
     if (auth.error) {
@@ -850,7 +889,7 @@ export async function pullTeamMemory(
 
   const filesWritten = await writeRemoteEntriesToLocal(entries)
   if (filesWritten > 0) {
-    const { clearMemoryFileCaches } = await import('../../utils/claudemd.js')
+    const { clearMemoryFileCaches } = await import('../../utils/instructions.js')
     clearMemoryFileCaches()
   }
   logForDebugging(`team-memory-sync: pulled ${filesWritten} files`, {

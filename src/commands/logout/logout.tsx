@@ -6,6 +6,7 @@ import { getGroveNoticeConfig, getGroveSettings } from '../../services/api/grove
 import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 // flushTelemetry is loaded lazily to avoid pulling in ~1.1MB of OpenTelemetry at startup
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
+import { clearModernAuthCache } from '../../services/auth/storage.js';
 import { getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
@@ -43,6 +44,11 @@ export async function performLogout({
       }
     }
     updated.oauthAccount = undefined;
+    updated.authProvider = undefined;
+    updated.sessionIssuer = undefined;
+    if (updated.preferredModelProvider === 'openai') {
+      updated.preferredModelProvider = undefined;
+    }
     return updated;
   });
 }
@@ -51,6 +57,7 @@ export async function performLogout({
 export async function clearAuthRelatedCaches(): Promise<void> {
   // Clear the OAuth token cache
   getClaudeAIOAuthTokens.cache?.clear?.();
+  clearModernAuthCache();
   clearTrustedDeviceTokenCache();
   clearBetasCaches();
   clearToolSchemaCache();
@@ -73,7 +80,7 @@ export async function call(): Promise<React.ReactNode> {
   await performLogout({
     clearOnboarding: true
   });
-  const message = <Text>Successfully logged out from your Anthropic account.</Text>;
+  const message = <Text>Successfully logged out.</Text>;
   setTimeout(() => {
     gracefulShutdownSync(0, 'logout');
   }, 200);

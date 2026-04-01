@@ -1,6 +1,8 @@
 import * as React from 'react';
+import { homedir } from 'os';
 import type { Notification } from '../context/notifications.js';
 import { Text } from '../ink.js';
+import { getGlobalClaudeFile } from '../utils/env.js';
 import { logForDebugging } from '../utils/debug.js';
 import { checkAndInstallOfficialMarketplace } from '../utils/plugins/officialMarketplaceStartupCheck.js';
 import { useStartupNotification } from './notifs/useStartupNotification.js';
@@ -19,7 +21,7 @@ async function _temp() {
     logForDebugging("Showing marketplace config save failure notification");
     notifs.push({
       key: "marketplace-config-save-failed",
-      jsx: <Text color="error">Failed to save marketplace retry info · Check ~/.claude.json permissions</Text>,
+      jsx: <Text color="error">Failed to save marketplace retry info · Check {getGlobalClaudeFile().replace(homedir(), '~')} permissions</Text>,
       priority: "immediate",
       timeoutMs: 10000
     });

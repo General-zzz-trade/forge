@@ -63,7 +63,7 @@ export const PermissionsSchema = lazySchema(() =>
             : EXTERNAL_PERMISSION_MODES,
         )
         .optional()
-        .describe('Default permission mode when Claude Code needs access'),
+        .describe('Default permission mode when Forge needs access'),
       disableBypassPermissionsMode: z
         .enum(['disable'])
         .optional()
@@ -211,7 +211,8 @@ export const DeniedMcpServerEntrySchema = lazySchema(() =>
  *
  * ⚠️ BACKWARD COMPATIBILITY NOTICE ⚠️
  *
- * This schema defines the structure of user settings files (.claude/settings.json).
+ * This schema defines the structure of user settings files (.forge/settings.json
+ * with legacy .claude/settings.json compatibility).
  * We support backward-compatible changes! Here's how:
  *
  * ✅ ALLOWED CHANGES:
@@ -258,7 +259,7 @@ export const SettingsSchema = lazySchema(() =>
       $schema: z
         .literal(CLAUDE_CODE_SETTINGS_SCHEMA_URL)
         .optional()
-        .describe('JSON Schema reference for Claude Code settings'),
+        .describe('JSON Schema reference for Forge settings'),
       apiKeyHelper: z
         .string()
         .optional()
@@ -291,7 +292,7 @@ export const SettingsSchema = lazySchema(() =>
                   .describe('IdP issuer URL for OIDC discovery'),
                 clientId: z
                   .string()
-                  .describe("Claude Code's client_id registered at the IdP"),
+                  .describe("Forge's client_id registered at the IdP"),
                 callbackPort: z
                   .number()
                   .int()
@@ -332,7 +333,7 @@ export const SettingsSchema = lazySchema(() =>
         ),
       env: EnvironmentVariablesSchema()
         .optional()
-        .describe('Environment variables to set for Claude Code sessions'),
+        .describe('Environment variables to set for Forge sessions'),
       // Attribution for commits and PRs
       attribution: z
         .object({
@@ -354,7 +355,7 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe(
           'Customize attribution text for commits and PRs. ' +
-            'Each field defaults to the standard Claude Code attribution if not set.',
+            'Each field defaults to the standard Forge attribution if not set.',
         ),
       includeCoAuthoredBy: z
         .boolean()
@@ -375,7 +376,7 @@ export const SettingsSchema = lazySchema(() =>
       model: z
         .string()
         .optional()
-        .describe('Override the default model used by Claude Code'),
+        .describe('Override the default model used by Forge'),
       // Enterprise allowlist of models
       availableModels: z
         .array(z.string())
@@ -541,7 +542,7 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'When set in managed settings, blocks non-plugin customization sources for the listed surfaces. ' +
             'Array form locks specific surfaces (e.g. ["skills", "hooks"]); `true` locks all four; `false` is an explicit no-op. ' +
-            'Blocked: ~/.claude/{surface}/, .claude/{surface}/ (project), settings.json hooks, .mcp.json. ' +
+            'Blocked: ~/.forge/{surface}/, .forge/{surface}/ (project), plus legacy ~/.claude/{surface}/ and .claude/{surface}/, settings.json hooks, .mcp.json. ' +
             'NOT blocked: managed (policySettings) sources, plugin-provided customizations. ' +
             'Composes with strictKnownMarketplaces for end-to-end admin control — plugins gated by ' +
             'marketplace allowlist, everything else blocked here.',
@@ -596,7 +597,7 @@ export const SettingsSchema = lazySchema(() =>
         })
         .optional()
         .describe(
-          'Additional marketplaces to make available for this repository. Typically used in repository .claude/settings.json to ensure team members have required plugin sources.',
+          'Additional marketplaces to make available for this repository. Typically used in repository .forge/settings.json to ensure team members have required plugin sources, with legacy .claude/settings.json compatibility.',
         ),
       // Enterprise strict list of allowed marketplace sources (policy settings only)
       // When set, ONLY these exact sources can be added. Check happens BEFORE download.
@@ -811,7 +812,7 @@ export const SettingsSchema = lazySchema(() =>
               .enum(['disable'])
               .optional()
               .describe(
-                'Prevent claude-cli:// protocol handler registration with the OS',
+                'Prevent Forge deep link protocol handler registration with the OS (forge-cli://, with legacy claude-cli:// compatibility)',
               ),
           }
         : {}),
@@ -826,7 +827,7 @@ export const SettingsSchema = lazySchema(() =>
         .optional()
         .describe(
           'Custom directory for plan files, relative to project root. ' +
-            'If not set, defaults to ~/.claude/plans/',
+            'If not set, defaults to ~/.forge/plans/ with legacy ~/.claude/plans/ compatibility.',
         ),
       ...(process.env.USER_TYPE === 'ant'
         ? {
@@ -945,7 +946,7 @@ export const SettingsSchema = lazySchema(() =>
         .string()
         .optional()
         .describe(
-          'Custom directory path for auto-memory storage. Supports ~/ prefix for home directory expansion. Ignored if set in projectSettings (checked-in .claude/settings.json) for security. When unset, defaults to ~/.claude/projects/<sanitized-cwd>/memory/.',
+          'Custom directory path for auto-memory storage. Supports ~/ prefix for home directory expansion. Ignored if set in projectSettings (checked-in .forge/settings.json, with legacy .claude/settings.json compatibility) for security. When unset, defaults to ~/.forge/projects/<sanitized-cwd>/memory/ with legacy ~/.claude/projects/<sanitized-cwd>/memory/ compatibility.',
         ),
       autoDreamEnabled: z
         .boolean()
@@ -1054,10 +1055,18 @@ export const SettingsSchema = lazySchema(() =>
         .array(z.string())
         .optional()
         .describe(
-          'Glob patterns or absolute paths of CLAUDE.md files to exclude from loading. ' +
+          'Deprecated alias for instructionExcludes. Glob patterns or absolute paths of CLAUDE.md files to exclude from loading. ' +
             'Patterns are matched against absolute file paths using picomatch. ' +
             'Only applies to User, Project, and Local memory types (Managed/policy files cannot be excluded). ' +
             'Examples: "/home/user/monorepo/CLAUDE.md", "**/code/CLAUDE.md", "**/some-dir/.claude/rules/**"',
+        ),
+      instructionExcludes: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Glob patterns or absolute paths of instruction files to exclude from loading. ' +
+            'Preferred alias for claudeMdExcludes. Applies to FORGE.md, FORGE.local.md, legacy CLAUDE.md, and .forge/.claude rules files. ' +
+            'Examples: "/home/user/monorepo/FORGE.md", "**/code/FORGE.md", "**/some-dir/.forge/rules/**"',
         ),
       pluginTrustMessage: z
         .string()

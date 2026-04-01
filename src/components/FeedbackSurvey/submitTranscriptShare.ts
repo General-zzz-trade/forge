@@ -1,5 +1,9 @@
 import axios from 'axios'
 import { readFile, stat } from 'fs/promises'
+import {
+  getActiveForgeSession,
+  requireAuthenticatedApiBaseUrl,
+} from '../../services/auth/runtime.js'
 import type { Message } from '../../types/message.js'
 import { checkAndRefreshOAuthTokenIfNeeded } from '../../utils/auth.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -71,7 +75,9 @@ export async function submitTranscriptShare(
 
     const content = redactSensitiveInfo(jsonStringify(data))
 
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     const authResult = getAuthHeaders()
     if (authResult.error) {
@@ -84,8 +90,9 @@ export async function submitTranscriptShare(
       ...authResult.headers,
     }
 
+    const endpoint = `${requireAuthenticatedApiBaseUrl()}/api/claude_code_shared_session_transcripts`
     const response = await axios.post(
-      'https://api.anthropic.com/api/claude_code_shared_session_transcripts',
+      endpoint,
       { content, appearance_id: appearanceId },
       {
         headers,

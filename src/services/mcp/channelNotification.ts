@@ -28,6 +28,7 @@ import { lazySchema } from '../../utils/lazySchema.js'
 import { parsePluginIdentifier } from '../../utils/plugins/pluginIdentifier.js'
 import { getSettingsForSource } from '../../utils/settings/settings.js'
 import { escapeXmlAttr } from '../../utils/xml.js'
+import { getActiveForgeSession } from '../auth/runtime.js'
 import {
   type ChannelAllowlistEntry,
   getChannelAllowlist,
@@ -219,7 +220,10 @@ export function gateChannelServer(
   // OAuth-only. API key users (console) are blocked — there's no
   // channelsEnabled admin surface in console yet, so the policy opt-in
   // flow doesn't exist for them. Drop this when console parity lands.
-  if (!getClaudeAIOAuthTokens()?.accessToken) {
+  if (
+    !getActiveForgeSession()?.accessToken &&
+    !getClaudeAIOAuthTokens()?.accessToken
+  ) {
     return {
       action: 'skip',
       kind: 'auth',

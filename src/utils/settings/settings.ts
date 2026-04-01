@@ -17,6 +17,7 @@ import { getErrnoCode, isENOENT } from '../errors.js'
 import { writeFileSyncAndFlush_DEPRECATED } from '../file.js'
 import { readFileSync } from '../fileRead.js'
 import { getFsImplementation, safeResolvePath } from '../fsOperations.js'
+import { getPreferredRelativeProjectSettingsFilePath } from '../forgePaths.js'
 import { addFileGlobRuleToGitignore } from '../git/gitignore.js'
 import { safeParseJSON } from '../json.js'
 import { logError } from '../log.js'
@@ -232,7 +233,7 @@ function parseSettingsFileUncached(path: string): {
 
 /**
  * Get the absolute path to the associated file root for a given settings source
- * (e.g. for $PROJ_DIR/.claude/settings.json, returns $PROJ_DIR)
+ * (e.g. for $PROJ_DIR/.forge/settings.json, with legacy .claude support, returns $PROJ_DIR)
  * @param source The source of the settings
  * @returns The root path of the settings file
  */
@@ -298,12 +299,10 @@ export function getSettingsFilePathForSource(
 export function getRelativeSettingsFilePathForSource(
   source: 'projectSettings' | 'localSettings',
 ): string {
-  switch (source) {
-    case 'projectSettings':
-      return join('.claude', 'settings.json')
-    case 'localSettings':
-      return join('.claude', 'settings.local.json')
-  }
+  return getPreferredRelativeProjectSettingsFilePath(
+    source,
+    getOriginalCwd(),
+  )
 }
 
 export function getSettingsForSource(
@@ -850,7 +849,7 @@ export function getSettingsWithSources(): SettingsWithSources {
 /**
  * Get merged settings and validation errors from all sources
  * This function now uses session-level caching to avoid repeated file I/O.
- * Settings changes require Claude Code restart, so cache is valid for entire session.
+ * Settings changes require Forge restart, so cache is valid for entire session.
  * @returns Merged settings and all validation errors encountered
  */
 export function getSettingsWithErrors(): SettingsWithErrors {

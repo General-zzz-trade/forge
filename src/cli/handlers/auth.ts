@@ -8,6 +8,21 @@ import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
 } from '../../services/analytics/index.js'
+import {
+  createAuthProvider,
+  isAuthProviderConfigured,
+} from '../../services/auth/providers/index.js'
+import {
+  getForgeSession,
+  getIdentitySession,
+  saveForgeSession,
+  saveIdentitySession,
+} from '../../services/auth/storage.js'
+import type {
+  ForgeAccountInfo,
+  IdentityProviderId,
+  ProviderLoginResult,
+} from '../../services/auth/types.js'
 import { getSSLErrorHint } from '../../services/api/errorUtils.js'
 import { fetchAndStoreClaudeCodeFirstTokenDate } from '../../services/api/firstTokenDate.js'
 import {
@@ -18,7 +33,6 @@ import {
   storeOAuthAccountInfo,
 } from '../../services/oauth/client.js'
 import { getOauthProfileFromOauthToken } from '../../services/oauth/getOauthProfile.js'
-import { OAuthService } from '../../services/oauth/index.js'
 import type { OAuthTokens } from '../../services/oauth/types.js'
 import {
   clearOAuthTokenCache,
@@ -30,7 +44,7 @@ import {
   saveOAuthTokensIfNeeded,
   validateForceLoginOrg,
 } from '../../utils/auth.js'
-import { saveGlobalConfig } from '../../utils/config.js'
+import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { isRunningOnHomespace } from '../../utils/envUtils.js'
 import { errorMessage } from '../../utils/errors.js'
@@ -106,7 +120,96 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
     }
   }
 
+  saveGlobalConfig(current => ({
+    ...current,
+    authProvider: 'anthropic',
+    sessionIssuer: 'anthropic',
+  }))
+
   await clearAuthRelatedCaches()
+}
+
+function resolveRequestedProvider({
+  openai,
+  anthropic,
+  useConsole,
+  claudeai,
+}: {
+  openai?: boolean
+  anthropic?: boolean
+  useConsole?: boolean
+  claudeai?: boolean
+}): IdentityProviderId {
+  if (openai && anthropic) {
+    throw new Error('--openai and --anthropic cannot be used together.')
+  }
+  if (openai && (useConsole || claudeai)) {
+    throw new Error(
+      '--openai cannot be combined with --console or --claudeai.',
+    )
+  }
+  if (openai) return 'openai'
+  if (anthropic || useConsole || claudeai) return 'anthropic'
+  return process.env.FORGE_AUTH_PROVIDER === 'openai' ? 'openai' : 'anthropic'
+}
+
+function ensureOpenAIAuthReady(): void {
+  if (!isAuthProviderConfigured('openai')) {
+    throw new Error(
+      'OpenAI login requires either an active Codex CLI login (`codex login`) or FORGE_OPENAI_CLIENT_ID to be configured.',
+    )
+  }
+}
+
+function buildFallbackForgeAccount(
+  result: Extract<ProviderLoginResult, { kind: 'forge' }>,
+): ForgeAccountInfo | undefined {
+  if (!result.identity.email) {
+    return undefined
+  }
+  return {
+    accountUuid: result.identity.subjectId ?? result.session.userId,
+    emailAddress: result.identity.email,
+    displayName:
+      typeof result.identity.metadata?.name === 'string'
+        ? result.identity.metadata.name
+        : undefined,
+  }
+}
+
+async function installForgeLogin(
+  result: Extract<ProviderLoginResult, { kind: 'forge' }>,
+): Promise<void> {
+  await performLogout({ clearOnboarding: false })
+
+  const identityResult = saveIdentitySession(result.identity)
+  const sessionResult = saveForgeSession(result.session)
+  if (!identityResult.success || !sessionResult.success) {
+    throw new Error('Unable to save Forge authentication state.')
+  }
+
+  const account = result.account ?? buildFallbackForgeAccount(result)
+  saveGlobalConfig(current => ({
+    ...current,
+    hasCompletedOnboarding: true,
+    authProvider: result.provider,
+    sessionIssuer: result.session.issuer,
+    preferredModelProvider:
+      result.session.capabilities.modelProviders[0] ?? 'openai',
+    oauthAccount: account ?? current.oauthAccount,
+  }))
+
+  await clearAuthRelatedCaches()
+}
+
+export async function installAuthLoginResult(
+  result: ProviderLoginResult,
+): Promise<void> {
+  if (result.kind === 'anthropic') {
+    await installOAuthTokens(result.tokens)
+    return
+  }
+  await installForgeLogin(result)
 }
 
 export async function authLogin({
@@ -114,17 +217,49 @@ export async function authLogin({
   sso,
   console: useConsole,
   claudeai,
+  openai,
+  anthropic,
 }: {
   email?: string
   sso?: boolean
   console?: boolean
   claudeai?: boolean
+  openai?: boolean
+  anthropic?: boolean
 }): Promise<void> {
   if (useConsole && claudeai) {
     process.stderr.write(
       'Error: --console and --claudeai cannot be used together.\n',
     )
     process.exit(1)
+  }
+
+  let authProviderId: IdentityProviderId
+  try {
+    authProviderId = resolveRequestedProvider({
+      openai,
+      anthropic,
+      useConsole,
+      claudeai,
+    })
+  } catch (error) {
+    process.stderr.write(`Error: ${errorMessage(error)}\n`)
+    process.exit(1)
+  }
+
+  if (authProviderId === 'openai') {
+    if (useConsole || claudeai || sso) {
+      process.stderr.write(
+        'Error: --openai does not support --console, --claudeai, or --sso.\n',
+      )
+      process.exit(1)
+    }
+    try {
+      ensureOpenAIAuthReady()
+    } catch (error) {
+      process.stderr.write(`Error: ${errorMessage(error)}\n`)
+      process.exit(1)
+    }
   }
 
   const settings = getInitialSettings()
@@ -138,7 +273,7 @@ export async function authLogin({
   // Fast path: if a refresh token is provided via env var, skip the browser
   // OAuth flow and exchange it directly for tokens.
   const envRefreshToken = process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
-  if (envRefreshToken) {
+  if (envRefreshToken && authProviderId === 'anthropic') {
     const envScopes = process.env.CLAUDE_CODE_OAUTH_SCOPES
     if (!envScopes) {
       process.stderr.write(
@@ -187,12 +322,16 @@ export async function authLogin({
 
   const resolvedLoginMethod = sso ? 'sso' : undefined
 
-  const oauthService = new OAuthService()
+  const authProvider = createAuthProvider(authProviderId)
 
   try {
-    logEvent('tengu_oauth_flow_start', { loginWithClaudeAi })
+    logEvent('tengu_oauth_flow_start', {
+      loginWithClaudeAi,
+      provider:
+        authProviderId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    })
 
-    const result = await oauthService.startOAuthFlow(
+    const result = await authProvider.startInteractiveLogin(
       async url => {
         process.stdout.write('Opening browser to sign in…\n')
         process.stdout.write(`If the browser didn't open, visit: ${url}\n`)
@@ -205,15 +344,23 @@ export async function authLogin({
       },
     )
 
-    await installOAuthTokens(result)
+    if (result.kind === 'anthropic') {
+      await installOAuthTokens(result.tokens)
 
-    const orgResult = await validateForceLoginOrg()
-    if (!orgResult.valid) {
-      process.stderr.write(orgResult.message + '\n')
-      process.exit(1)
+      const orgResult = await validateForceLoginOrg()
+      if (!orgResult.valid) {
+        process.stderr.write(orgResult.message + '\n')
+        process.exit(1)
+      }
+    } else {
+      await installAuthLoginResult(result)
     }
 
-    logEvent('tengu_oauth_success', { loginWithClaudeAi })
+    logEvent('tengu_oauth_success', {
+      loginWithClaudeAi,
+      provider:
+        authProviderId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    })
 
     process.stdout.write('Login successful.\n')
     process.exit(0)
@@ -225,7 +372,7 @@ export async function authLogin({
     )
     process.exit(1)
   } finally {
-    oauthService.cleanup()
+    authProvider.cleanup()
   }
 }
 
@@ -237,15 +384,26 @@ export async function authStatus(opts: {
   const { source: apiKeySource } = getAnthropicApiKeyWithSource()
   const hasApiKeyEnvVar =
     !!process.env.ANTHROPIC_API_KEY && !isRunningOnHomespace()
-  const oauthAccount = getOauthAccountInfo()
+  const config = getGlobalConfig()
+  const oauthAccount = getOauthAccountInfo() ?? config.oauthAccount
   const subscriptionType = getSubscriptionType()
   const using3P = isUsing3PServices()
+  const forgeSession = getForgeSession()
+  const identitySession = getIdentitySession()
+  const hasForgeSession = !!forgeSession?.accessToken
   const loggedIn =
-    hasToken || apiKeySource !== 'none' || hasApiKeyEnvVar || using3P
+    hasForgeSession ||
+    hasToken ||
+    apiKeySource !== 'none' ||
+    hasApiKeyEnvVar ||
+    using3P
 
   // Determine auth method
   let authMethod: string = 'none'
-  if (using3P) {
+  if (hasForgeSession) {
+    authMethod =
+      forgeSession.issuer === 'openai' ? 'openai_session' : 'forge_session'
+  } else if (using3P) {
     authMethod = 'third_party'
   } else if (authTokenSource === 'claude.ai') {
     authMethod = 'claude.ai'
@@ -260,34 +418,57 @@ export async function authStatus(opts: {
   }
 
   if (opts.text) {
-    const properties = [
-      ...buildAccountProperties(),
-      ...buildAPIProviderProperties(),
-    ]
-    let hasAuthProperty = false
-    for (const prop of properties) {
-      const value =
-        typeof prop.value === 'string'
-          ? prop.value
-          : Array.isArray(prop.value)
-            ? prop.value.join(', ')
-            : null
-      if (value === null || value === 'none') {
-        continue
+    if (hasForgeSession) {
+      const provider =
+        identitySession?.provider ??
+        config.authProvider ??
+        forgeSession.authProvider
+      process.stdout.write(`Auth provider: ${provider}\n`)
+      process.stdout.write(`Session issuer: ${forgeSession.issuer}\n`)
+      if (oauthAccount?.emailAddress) {
+        process.stdout.write(`Email: ${oauthAccount.emailAddress}\n`)
       }
-      hasAuthProperty = true
-      if (prop.label) {
-        process.stdout.write(`${prop.label}: ${value}\n`)
-      } else {
-        process.stdout.write(`${value}\n`)
+      if (oauthAccount?.organizationUuid) {
+        process.stdout.write(`Org ID: ${oauthAccount.organizationUuid}\n`)
       }
-    }
-    if (!hasAuthProperty && hasApiKeyEnvVar) {
-      process.stdout.write('API key: ANTHROPIC_API_KEY\n')
+      if (oauthAccount?.organizationName) {
+        process.stdout.write(`Org Name: ${oauthAccount.organizationName}\n`)
+      }
+      if (forgeSession.capabilities.modelProviders.length > 0) {
+        process.stdout.write(
+          `Model providers: ${forgeSession.capabilities.modelProviders.join(', ')}\n`,
+        )
+      }
+    } else {
+      const properties = [
+        ...buildAccountProperties(),
+        ...buildAPIProviderProperties(),
+      ]
+      let hasAuthProperty = false
+      for (const prop of properties) {
+        const value =
+          typeof prop.value === 'string'
+            ? prop.value
+            : Array.isArray(prop.value)
+              ? prop.value.join(', ')
+              : null
+        if (value === null || value === 'none') {
+          continue
+        }
+        hasAuthProperty = true
+        if (prop.label) {
+          process.stdout.write(`${prop.label}: ${value}\n`)
+        } else {
+          process.stdout.write(`${value}\n`)
+        }
+      }
+      if (!hasAuthProperty && hasApiKeyEnvVar) {
+        process.stdout.write('API key: ANTHROPIC_API_KEY\n')
+      }
     }
     if (!loggedIn) {
       process.stdout.write(
-        'Not logged in. Run claude auth login to authenticate.\n',
+        'Not logged in. Run forge auth login to authenticate.\n',
       )
     }
   } else {
@@ -302,6 +483,20 @@ export async function authStatus(opts: {
       loggedIn,
       authMethod,
       apiProvider,
+    }
+    if (hasForgeSession) {
+      output.authProvider =
+        identitySession?.provider ??
+        config.authProvider ??
+        forgeSession.authProvider
+      output.sessionIssuer = forgeSession.issuer
+      output.modelProvider =
+        config.preferredModelProvider ??
+        forgeSession.capabilities.modelProviders[0] ??
+        null
+      output.email = oauthAccount?.emailAddress ?? identitySession?.email ?? null
+      output.orgId = oauthAccount?.organizationUuid ?? null
+      output.orgName = oauthAccount?.organizationName ?? null
     }
     if (resolvedApiKeySource) {
       output.apiKeySource = resolvedApiKeySource
@@ -325,6 +520,6 @@ export async function authLogout(): Promise<void> {
     process.stderr.write('Failed to log out.\n')
     process.exit(1)
   }
-  process.stdout.write('Successfully logged out from your Anthropic account.\n')
+  process.stdout.write('Successfully logged out.\n')
   process.exit(0)
 }

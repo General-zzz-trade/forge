@@ -8,22 +8,29 @@
 import { homedir, userInfo } from 'os'
 import { join } from 'path'
 
-/** macOS preference domain for Claude Code MDM profiles. */
-export const MACOS_PREFERENCE_DOMAIN = 'com.anthropic.claudecode'
+/** macOS preference domains for Forge MDM profiles, newest first. */
+export const MACOS_PREFERENCE_DOMAINS = [
+  'com.anthropic.forge',
+  'com.anthropic.claudecode',
+] as const
 
 /**
- * Windows registry key paths for Claude Code MDM policies.
+ * Windows registry key paths for Forge MDM policies.
  *
  * These keys live under SOFTWARE\Policies which is on the WOW64 shared key
  * list — both 32-bit and 64-bit processes see the same values without
- * redirection. Do not move these to SOFTWARE\ClaudeCode, as SOFTWARE is
+ * redirection. Do not move these to SOFTWARE\Forge, as SOFTWARE is
  * redirected and 32-bit processes would silently read from WOW6432Node.
  * See: https://learn.microsoft.com/en-us/windows/win32/winprog64/shared-registry-keys
  */
-export const WINDOWS_REGISTRY_KEY_PATH_HKLM =
-  'HKLM\\SOFTWARE\\Policies\\ClaudeCode'
-export const WINDOWS_REGISTRY_KEY_PATH_HKCU =
-  'HKCU\\SOFTWARE\\Policies\\ClaudeCode'
+export const WINDOWS_REGISTRY_KEY_PATHS_HKLM = [
+  'HKLM\\SOFTWARE\\Policies\\Forge',
+  'HKLM\\SOFTWARE\\Policies\\ClaudeCode',
+] as const
+export const WINDOWS_REGISTRY_KEY_PATHS_HKCU = [
+  'HKCU\\SOFTWARE\\Policies\\Forge',
+  'HKCU\\SOFTWARE\\Policies\\ClaudeCode',
+] as const
 
 /** Windows registry value name containing the JSON settings blob. */
 export const WINDOWS_REGISTRY_VALUE_NAME = 'Settings'
@@ -52,29 +59,29 @@ export function getMacOSPlistPaths(): Array<{ path: string; label: string }> {
 
   const paths: Array<{ path: string; label: string }> = []
 
-  if (username) {
-    paths.push({
-      path: `/Library/Managed Preferences/${username}/${MACOS_PREFERENCE_DOMAIN}.plist`,
-      label: 'per-user managed preferences',
-    })
-  }
+  for (const domain of MACOS_PREFERENCE_DOMAINS) {
+    const isLegacyDomain = domain !== MACOS_PREFERENCE_DOMAINS[0]
+    const labelSuffix = isLegacyDomain ? ' (legacy ClaudeCode)' : ' (Forge)'
 
-  paths.push({
-    path: `/Library/Managed Preferences/${MACOS_PREFERENCE_DOMAIN}.plist`,
-    label: 'device-level managed preferences',
-  })
+    if (username) {
+      paths.push({
+        path: `/Library/Managed Preferences/${username}/${domain}.plist`,
+        label: `per-user managed preferences${labelSuffix}`,
+      })
+    }
 
-  // Allow user-writable preferences for local MDM testing in ant builds only.
-  if (process.env.USER_TYPE === 'ant') {
     paths.push({
-      path: join(
-        homedir(),
-        'Library',
-        'Preferences',
-        `${MACOS_PREFERENCE_DOMAIN}.plist`,
-      ),
-      label: 'user preferences (ant-only)',
+      path: `/Library/Managed Preferences/${domain}.plist`,
+      label: `device-level managed preferences${labelSuffix}`,
     })
+
+    // Allow user-writable preferences for local MDM testing in ant builds only.
+    if (process.env.USER_TYPE === 'ant') {
+      paths.push({
+        path: join(homedir(), 'Library', 'Preferences', `${domain}.plist`),
+        label: `user preferences${labelSuffix} (ant-only)`,
+      })
+    }
   }
 
   return paths

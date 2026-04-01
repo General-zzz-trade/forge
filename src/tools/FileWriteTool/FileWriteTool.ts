@@ -336,7 +336,7 @@ export const FileWriteTool = buildTool({
       limit: undefined,
     })
 
-    // Log when writing to CLAUDE.md
+    // Log writes to the legacy instruction filename for compatibility analytics.
     if (fullFilePath.endsWith(`${sep}CLAUDE.md`)) {
       logEvent('tengu_write_claudemd', {})
     }

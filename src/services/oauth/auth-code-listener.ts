@@ -108,8 +108,15 @@ export class AuthCodeListener {
    * Handles error case by sending a redirect to the appropriate success page with an error indicator,
    * ensuring the browser flow is completed properly.
    */
-  handleErrorRedirect(): void {
+  handleErrorRedirect(customHandler?: (res: ServerResponse) => void): void {
     if (!this.pendingResponse) return
+
+    if (customHandler) {
+      customHandler(this.pendingResponse)
+      this.pendingResponse = null
+      logEvent('tengu_oauth_automatic_redirect_error', { custom_handler: true })
+      return
+    }
 
     // TODO: swap to a different url once we have an error page
     const errorUrl = getOauthConfig().CLAUDEAI_SUCCESS_URL

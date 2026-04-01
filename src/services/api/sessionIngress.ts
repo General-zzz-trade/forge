@@ -1,6 +1,9 @@
 import axios, { type AxiosError } from 'axios'
 import type { UUID } from 'crypto'
-import { getOauthConfig } from '../../constants/oauth.js'
+import {
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from '../auth/runtime.js'
 import type { Entry, TranscriptMessage } from '../../types/logs.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { logForDiagnosticsNoPII } from '../../utils/diagLogs.js'
@@ -248,7 +251,14 @@ export async function getSessionLogsViaOAuth(
   accessToken: string,
   orgUUID: string,
 ): Promise<Entry[] | null> {
-  const url = `${getOauthConfig().BASE_API_URL}/v1/session_ingress/session/${sessionId}`
+  if (isUsingNativeOpenAISession()) {
+    logForDebugging(
+      '[session-ingress] Native OpenAI sessions skip first-party session ingress logs',
+    )
+    return null
+  }
+
+  const url = `${requireAuthenticatedApiBaseUrl()}/v1/session_ingress/session/${sessionId}`
   logForDebugging(`[session-ingress] Fetching session logs from: ${url}`)
   const headers = {
     ...getOAuthHeaders(accessToken),
@@ -293,7 +303,14 @@ export async function getTeleportEvents(
   accessToken: string,
   orgUUID: string,
 ): Promise<Entry[] | null> {
-  const baseUrl = `${getOauthConfig().BASE_API_URL}/v1/code/sessions/${sessionId}/teleport-events`
+  if (isUsingNativeOpenAISession()) {
+    logForDebugging(
+      '[teleport] Native OpenAI sessions skip first-party teleport events',
+    )
+    return null
+  }
+
+  const baseUrl = `${requireAuthenticatedApiBaseUrl()}/v1/code/sessions/${sessionId}/teleport-events`
   const headers = {
     ...getOAuthHeaders(accessToken),
     'x-organization-uuid': orgUUID,

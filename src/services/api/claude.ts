@@ -100,6 +100,7 @@ import {
   extractQuotaStatusFromHeaders,
 } from '../claudeAiLimits.js'
 import { getAPIContextManagement } from '../compact/apiMicrocompact.js'
+import { isUsingNativeOpenAISession } from '../auth/runtime.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
@@ -248,6 +249,7 @@ import {
   checkResponseForCacheBreak,
   recordPromptState,
 } from './promptCacheBreakDetection.js'
+import { queryOpenAIModel } from './openai.js'
 import {
   CannotRetryError,
   FallbackTriggeredError,
@@ -1394,6 +1396,35 @@ async function* queryModel(
     } as unknown as BetaToolUnion)
   }
   const allTools = [...toolSchemas, ...extraToolSchemas]
+
+  if (isUsingNativeOpenAISession()) {
+    try {
+      const assistantMessage = await queryOpenAIModel({
+        messages: messagesForAPI,
+        systemPrompt,
+        tools: allTools,
+        signal,
+        model: resolvedModel,
+        maxOutputTokensOverride: options.maxOutputTokensOverride,
+        toolChoice: options.toolChoice,
+        fetchOverride: options.fetchOverride,
+        outputFormat: options.outputFormat,
+      })
+      yield assistantMessage
+    } catch (error) {
+      logForDebugging(
+        `[openai-runtime] Native OpenAI query failed: ${
+          error instanceof Error ? error.stack || error.message : jsonStringify(error)
+        }`,
+        { level: 'error' },
+      )
+      if (error instanceof APIUserAbortError || signal.aborted) {
+        throw new APIUserAbortError()
+      }
+      yield getAssistantMessageFromError(error, options.model)
+    }
+    return
+  }
 
   const isFastMode =
     isFastModeEnabled() &&
@@ -3293,7 +3324,7 @@ export async function queryHaiku({
 type QueryWithModelOptions = Omit<Options, 'getToolPermissionContext'>
 
 /**
- * Query a specific model through the Claude Code infrastructure.
+ * Query a specific model through the Forge infrastructure.
  * This goes through the full query pipeline including proper authentication,
  * betas, and headers - unlike direct API calls.
  */

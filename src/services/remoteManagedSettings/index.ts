@@ -15,7 +15,7 @@
 import axios from 'axios'
 import { createHash } from 'crypto'
 import { open, unlink } from 'fs/promises'
-import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
+import { OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getAnthropicApiKeyWithSource,
@@ -33,6 +33,12 @@ import { sleep } from '../../utils/sleep.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getRetryDelay } from '../api/withRetry.js'
+import {
+  getActiveForgeSession,
+  isUsingBrokeredForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from '../auth/runtime.js'
 import {
   checkManagedSettingsSecurity,
   handleSecurityCheckResult,
@@ -103,7 +109,7 @@ export function initializeRemoteManagedSettingsLoadingPromise(): void {
  * Uses the OAuth config base API URL
  */
 function getRemoteManagedSettingsEndpoint() {
-  return `${getOauthConfig().BASE_API_URL}/api/claude_code/settings`
+  return `${requireAuthenticatedApiBaseUrl()}/api/claude_code/settings`
 }
 
 /**
@@ -167,6 +173,25 @@ function getRemoteSettingsAuthHeaders(): {
   headers: Record<string, string>
   error?: string
 } {
+  if (isUsingNativeOpenAISession()) {
+    return {
+      headers: {},
+      error:
+        'Native OpenAI sessions do not use Forge or Anthropic remote managed settings endpoints.',
+    }
+  }
+
+  const forgeSession = isUsingBrokeredForgeSession()
+    ? getActiveForgeSession()
+    : null
+  if (forgeSession?.accessToken) {
+    return {
+      headers: {
+        Authorization: `Bearer ${forgeSession.accessToken}`,
+      },
+    }
+  }
+
   // Try API key first (for Console users)
   // Skip apiKeyHelper to avoid circular dependency with getSettings()
   // Wrap in try-catch because getAnthropicApiKeyWithSource throws in CI/test environments
@@ -251,7 +276,9 @@ async function fetchRemoteManagedSettings(
   try {
     // Ensure OAuth token is fresh before fetching settings
     // This prevents 401 errors from stale cached tokens
-    await checkAndRefreshOAuthTokenIfNeeded()
+    if (!getActiveForgeSession()) {
+      await checkAndRefreshOAuthTokenIfNeeded()
+    }
 
     // Use local auth header getter to avoid circular dependency with getSettings()
     const authHeaders = getRemoteSettingsAuthHeaders()

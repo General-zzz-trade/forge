@@ -1,12 +1,12 @@
 /**
- * MDM (Mobile Device Management) profile enforcement for Claude Code managed settings.
+ * MDM (Mobile Device Management) profile enforcement for Forge managed settings.
  *
  * Reads enterprise settings from OS-level MDM configuration:
- * - macOS: `com.anthropic.claudecode` preference domain
+ * - macOS: `com.anthropic.forge` preference domain with legacy `com.anthropic.claudecode` fallback
  *   (MDM profiles at /Library/Managed Preferences/ only — not user-writable ~/Library/Preferences/)
- * - Windows: `HKLM\SOFTWARE\Policies\ClaudeCode` (admin-only)
- *   and `HKCU\SOFTWARE\Policies\ClaudeCode` (user-writable, lowest priority)
- * - Linux: No MDM equivalent (uses /etc/claude-code/managed-settings.json instead)
+ * - Windows: `HKLM\SOFTWARE\Policies\Forge` / `HKCU\SOFTWARE\Policies\Forge`
+ *   with legacy `...\ClaudeCode` fallback
+ * - Linux: No MDM equivalent (uses /etc/forge/managed-settings.json with legacy /etc/claude-code fallback)
  *
  * Policy settings use "first source wins" — the highest-priority source that exists
  * provides all policy settings. Priority (highest to lowest):
@@ -36,8 +36,6 @@ import {
   type ValidationError,
 } from '../validation.js'
 import {
-  WINDOWS_REGISTRY_KEY_PATH_HKCU,
-  WINDOWS_REGISTRY_KEY_PATH_HKLM,
   WINDOWS_REGISTRY_VALUE_NAME,
 } from './constants.js'
 import {
@@ -239,12 +237,12 @@ function consumeRawReadResult(raw: RawReadResult): {
   }
 
   // Windows: HKLM result
-  if (raw.hklmStdout) {
-    const jsonString = parseRegQueryStdout(raw.hklmStdout)
+  if (raw.hklm) {
+    const jsonString = parseRegQueryStdout(raw.hklm.stdout)
     if (jsonString) {
       const result = parseCommandOutputAsSettings(
         jsonString,
-        `Registry: ${WINDOWS_REGISTRY_KEY_PATH_HKLM}\\${WINDOWS_REGISTRY_VALUE_NAME}`,
+        `Registry: ${raw.hklm.keyPath}\\${WINDOWS_REGISTRY_VALUE_NAME}`,
       )
       if (Object.keys(result.settings).length > 0) {
         return { mdm: result, hkcu: EMPTY_RESULT }
@@ -258,12 +256,12 @@ function consumeRawReadResult(raw: RawReadResult): {
   }
 
   // Fall through to HKCU (already read in parallel)
-  if (raw.hkcuStdout) {
-    const jsonString = parseRegQueryStdout(raw.hkcuStdout)
+  if (raw.hkcu) {
+    const jsonString = parseRegQueryStdout(raw.hkcu.stdout)
     if (jsonString) {
       const result = parseCommandOutputAsSettings(
         jsonString,
-        `Registry: ${WINDOWS_REGISTRY_KEY_PATH_HKCU}\\${WINDOWS_REGISTRY_VALUE_NAME}`,
+        `Registry: ${raw.hkcu.keyPath}\\${WINDOWS_REGISTRY_VALUE_NAME}`,
       )
       return { mdm: EMPTY_RESULT, hkcu: result }
     }

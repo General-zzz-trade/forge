@@ -1,7 +1,7 @@
 /**
  * Plugin Loader Module
  *
- * This module is responsible for discovering, loading, and validating Claude Code plugins
+ * This module is responsible for discovering, loading, and validating Forge plugins
  * from various sources including marketplaces and git repositories.
  *
  * NPM packages are also supported but must be referenced through marketplaces - the marketplace
@@ -101,6 +101,7 @@ import {
   getPluginByIdCacheOnly,
   loadKnownMarketplacesConfigSafe,
 } from './marketplaceManager.js'
+import { getPreferredPluginManifestPath } from './pluginManifestPaths.js'
 import { getPluginSeedDirs, getPluginsDirectory } from './pluginDirectories.js'
 import { parsePluginIdentifier } from './pluginIdentifier.js'
 import { validatePathWithinBase } from './pluginInstallationHelpers.js'
@@ -163,7 +164,8 @@ export function getVersionedCachePathIn(
 
 /**
  * Get versioned cache path for a plugin under the primary plugins directory.
- * Format: ~/.claude/plugins/cache/{marketplace}/{plugin}/{version}/
+ * Format: ~/.forge/plugins/cache/{marketplace}/{plugin}/{version}/ with legacy
+ * ~/.claude/plugins/cache compatibility.
  *
  * @param pluginId - Plugin identifier in format "name@marketplace"
  * @param version - Version string (semver, git SHA, etc.)
@@ -239,7 +241,8 @@ export async function probeSeedCacheAnyVersion(
 
 /**
  * Get legacy (non-versioned) cache path for a plugin.
- * Format: ~/.claude/plugins/cache/{plugin-name}/
+ * Format: ~/.forge/plugins/cache/{plugin-name}/ with legacy ~/.claude/plugins/cache
+ * compatibility.
  *
  * Used for backward compatibility with existing installations.
  *
@@ -976,8 +979,7 @@ export async function cachePlugin(
     throw error
   }
 
-  const manifestPath = join(tempPath, '.claude-plugin', 'plugin.json')
-  const legacyManifestPath = join(tempPath, 'plugin.json')
+  const manifestPath = getPreferredPluginManifestPath(tempPath, true)
   let manifest: PluginManifest
 
   if (await pathExists(manifestPath)) {
@@ -1022,53 +1024,6 @@ export async function cachePlugin(
 
       throw new Error(
         `Plugin has a corrupt manifest file at ${manifestPath}. JSON parse error: ${errorMsg}`,
-      )
-    }
-  } else if (await pathExists(legacyManifestPath)) {
-    try {
-      const content = await readFile(legacyManifestPath, {
-        encoding: 'utf-8',
-      })
-      const parsed = jsonParse(content)
-      const result = PluginManifestSchema().safeParse(parsed)
-
-      if (result.success) {
-        manifest = result.data
-      } else {
-        // Manifest exists but is invalid - throw error
-        const errors = result.error.issues
-          .map(err => `${err.path.join('.')}: ${err.message}`)
-          .join(', ')
-
-        logForDebugging(
-          `Invalid legacy manifest at ${legacyManifestPath}: ${errors}`,
-          { level: 'error' },
-        )
-
-        throw new Error(
-          `Plugin has an invalid manifest file at ${legacyManifestPath}. Validation errors: ${errors}`,
-        )
-      }
-    } catch (error) {
-      // Check if this is a validation error we just threw
-      if (
-        error instanceof Error &&
-        error.message.includes('invalid manifest file')
-      ) {
-        throw error
-      }
-
-      // JSON parse error
-      const errorMsg = errorMessage(error)
-      logForDebugging(
-        `Failed to parse legacy manifest at ${legacyManifestPath}: ${errorMsg}`,
-        {
-          level: 'error',
-        },
-      )
-
-      throw new Error(
-        `Plugin has a corrupt manifest file at ${legacyManifestPath}. JSON parse error: ${errorMsg}`,
       )
     }
   } else {
@@ -1140,7 +1095,7 @@ export async function cachePlugin(
  *
  * @param manifestPath - Full path to the plugin.json file
  * @param pluginName - Name to use in default manifest (e.g., "my-plugin")
- * @param source - Source description for default manifest (e.g., "git:repo" or ".claude-plugin/name")
+ * @param source - Source description for default manifest (e.g., "git:repo" or ".forge-plugin/name")
  * @returns A valid PluginManifest object (either loaded or default)
  * @throws Error if manifest exists but is invalid (corrupt JSON or schema validation failure)
  */
@@ -1339,7 +1294,7 @@ async function validatePluginPaths(
  * are reported as errors but don't prevent plugin loading.
  *
  * @param pluginPath - Absolute path to the plugin directory
- * @param source - Source identifier (e.g., "git:repo", ".claude-plugin/my-plugin")
+ * @param source - Source identifier (e.g., "git:repo", ".forge-plugin/my-plugin")
  * @param enabled - Initial enabled state (may be overridden by settings)
  * @param fallbackName - Name to use if manifest doesn't specify one
  * @param strict - When true, adds errors for duplicate hook files (default: true)
@@ -1356,7 +1311,7 @@ export async function createPluginFromPath(
 
   // Step 1: Load or create the plugin manifest
   // This provides metadata about the plugin (name, version, etc.)
-  const manifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
+  const manifestPath = getPreferredPluginManifestPath(pluginPath, true)
   const manifest = await loadPluginManifest(manifestPath, fallbackName, source)
 
   // Step 2: Create the base plugin object
@@ -1365,7 +1320,7 @@ export async function createPluginFromPath(
     name: manifest.name, // Use name from manifest (or fallback)
     manifest, // Store full manifest for later use
     path: pluginPath, // Absolute path to plugin directory
-    source, // Source identifier (e.g., "git:repo" or ".claude-plugin/name")
+    source, // Source identifier (e.g., "git:repo" or ".forge-plugin/name")
     repository: source, // For backward compatibility with Plugin Repository
     enabled, // Current enabled state
   }
@@ -2227,11 +2182,7 @@ async function loadPluginFromMarketplaceEntry(
     // Always copy local plugins to versioned cache
     try {
       // Try to load manifest from plugin directory to check for version field first
-      const manifestPath = join(
-        sourcePluginPath,
-        '.claude-plugin',
-        'plugin.json',
-      )
+      const manifestPath = getPreferredPluginManifestPath(sourcePluginPath, true)
       let pluginManifest: PluginManifest | undefined
       try {
         pluginManifest = await loadPluginManifest(
@@ -2427,7 +2378,7 @@ async function finishLoadingPluginFromPath(
   const errors: PluginError[] = []
 
   // Check if plugin.json exists to determine if we should use marketplace manifest
-  const manifestPath = join(pluginPath, '.claude-plugin', 'plugin.json')
+  const manifestPath = getPreferredPluginManifestPath(pluginPath, true)
   const hasManifest = await pathExists(manifestPath)
 
   const { plugin, errors: pluginErrors } = await createPluginFromPath(
@@ -3218,7 +3169,7 @@ async function assemblePluginLoadResult(
  *
  * Use cases:
  * - After installing/uninstalling plugins
- * - After modifying .claude-plugin/ directory (for export)
+ * - After modifying .forge-plugin/ or legacy .claude-plugin/ metadata
  * - After changing enabledPlugins settings
  * - When debugging plugin loading issues
  */

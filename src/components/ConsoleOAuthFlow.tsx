@@ -1,13 +1,15 @@
 import { c as _c } from "react/compiler-runtime";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
-import { installOAuthTokens } from '../cli/handlers/auth.js';
+import { installAuthLoginResult } from '../cli/handlers/auth.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { setClipboard } from '../ink/termio/osc.js';
 import { useTerminalNotification } from '../ink/useTerminalNotification.js';
 import { Box, Link, Text } from '../ink.js';
 import { useKeybinding } from '../keybindings/useKeybinding.js';
 import { getSSLErrorHint } from '../services/api/errorUtils.js';
+import { createAuthProvider, isAuthProviderConfigured } from '../services/auth/providers/index.js';
+import type { IdentityProviderId } from '../services/auth/types.js';
 import { sendNotification } from '../services/notifier.js';
 import { OAuthService } from '../services/oauth/index.js';
 import { getOauthAccountInfo, validateForceLoginOrg } from '../utils/auth.js';
@@ -60,6 +62,7 @@ export function ConsoleOAuthFlow({
   const settings = getSettings_DEPRECATED() || {};
   const forceLoginMethod = forceLoginMethodProp ?? settings.forceLoginMethod;
   const orgUUID = settings.forceLoginOrgUUID;
+  const openAiLoginAvailable = mode === 'login' && !forceLoginMethod && isAuthProviderConfigured('openai');
   const forcedMethodMessage = forceLoginMethod === 'claudeai' ? 'Login method pre-selected: Subscription Plan (Claude Pro/Max)' : forceLoginMethod === 'console' ? 'Login method pre-selected: API Usage Billing (Anthropic Console)' : null;
   const terminal = useTerminalNotification();
   const [oauthStatus, setOAuthStatus] = useState<OAuthStatus>(() => {
@@ -80,6 +83,15 @@ export function ConsoleOAuthFlow({
   const [pastedCode, setPastedCode] = useState('');
   const [cursorOffset, setCursorOffset] = useState(0);
   const [oauthService] = useState(() => new OAuthService());
+  const [authProvider, setAuthProvider] = useState<IdentityProviderId>(() => {
+    if (mode === 'setup-token' || forceLoginMethod === 'claudeai' || forceLoginMethod === 'console') {
+      return 'anthropic';
+    }
+    if (openAiLoginAvailable && process.env.FORGE_AUTH_PROVIDER === 'openai') {
+      return 'openai';
+    }
+    return 'anthropic';
+  });
   const [loginWithClaudeAi, setLoginWithClaudeAi] = useState(() => {
     // Use Claude AI auth for setup-token mode to support user:inference scope
     return mode === 'setup-token' || forceLoginMethod === 'claudeai';
@@ -153,6 +165,18 @@ export function ConsoleOAuthFlow({
     }
   }, [pastedCode, oauthStatus, showPastePrompt, urlCopied]);
   async function handleSubmitCode(value: string, url: string) {
+    if (authProvider !== 'anthropic') {
+      setOAuthStatus({
+        state: 'error',
+        message: 'Manual code entry is only supported for Anthropic login. Open the sign-in URL in a browser on this machine.',
+        toRetry: {
+          state: 'waiting_for_login',
+          url
+        }
+      });
+      return;
+    }
+
     try {
       // Expecting format "authorizationCode#state" from the authorization callback URL
       const [authorizationCode, state] = value.split('#');
@@ -187,11 +211,14 @@ export function ConsoleOAuthFlow({
     }
   }
   const startOAuth = useCallback(async () => {
+    const openAiProvider =
+      authProvider === 'openai' ? createAuthProvider('openai') : null;
     try {
       logEvent('tengu_oauth_flow_start', {
-        loginWithClaudeAi
+        loginWithClaudeAi,
+        provider: authProvider as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
-      const result = await oauthService.startOAuthFlow(async url_0 => {
+      const result = authProvider === 'anthropic' ? await oauthService.startOAuthFlow(async url_0 => {
         setOAuthStatus({
           state: 'waiting_for_login',
           url: url_0
@@ -203,6 +230,17 @@ export function ConsoleOAuthFlow({
         expiresIn: mode === 'setup-token' ? 365 * 24 * 60 * 60 : undefined,
         // 1 year for setup-token
         orgUUID
+      }).then(tokens => ({
+        kind: 'anthropic' as const,
+        tokens
+      })) : await openAiProvider!.startInteractiveLogin(async url_0 => {
+        setOAuthStatus({
+          state: 'waiting_for_login',
+          url: url_0
+        });
+        setTimeout(setShowPastePrompt, 3000, true);
+      }, {
+        loginHint: undefined
       }).catch(err_1 => {
         const isTokenExchangeError = err_1.message.includes('Token exchange failed');
         // Enterprise TLS proxies (Zscaler et al.) intercept the token
@@ -224,24 +262,26 @@ export function ConsoleOAuthFlow({
         });
         throw err_1;
       });
-      if (mode === 'setup-token') {
+      if (mode === 'setup-token' && result.kind === 'anthropic') {
         // For setup-token mode, return the OAuth access token directly (it can be used as an API key)
         // Don't save to keychain - the token is displayed for manual use with CLAUDE_CODE_OAUTH_TOKEN
         setOAuthStatus({
           state: 'success',
-          token: result.accessToken
+          token: result.tokens.accessToken
         });
       } else {
-        await installOAuthTokens(result);
-        const orgResult = await validateForceLoginOrg();
-        if (!orgResult.valid) {
-          throw new Error(orgResult.message);
+        await installAuthLoginResult(result);
+        if (result.kind === 'anthropic') {
+          const orgResult = await validateForceLoginOrg();
+          if (!orgResult.valid) {
+            throw new Error(orgResult.message);
+          }
         }
         setOAuthStatus({
           state: 'success'
         });
         void sendNotification({
-          message: 'Claude Code login successful',
+          message: 'Forge login successful',
           notificationType: 'auth_success'
         }, terminal);
       }
@@ -259,8 +299,10 @@ export function ConsoleOAuthFlow({
         error: errorMessage as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         ssl_error: sslHint !== null
       });
+    } finally {
+      openAiProvider?.cleanup();
     }
-  }, [oauthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID]);
+  }, [authProvider, loginWithClaudeAi, mode, oauthService, orgUUID, setShowPastePrompt]);
   const pendingOAuthStartRef = useRef(false);
   useEffect(() => {
     if (oauthStatus.state === 'ready_to_start' && !pendingOAuthStartRef.current) {
@@ -287,7 +329,6 @@ export function ConsoleOAuthFlow({
     }
   }, [mode, oauthStatus, loginWithClaudeAi, onDone]);
 
-  // Cleanup OAuth service when component unmounts
   useEffect(() => {
     return () => {
       oauthService.cleanup();
@@ -325,7 +366,7 @@ export function ConsoleOAuthFlow({
             </Box>
           </Box>}
       <Box paddingLeft={1} flexDirection="column" gap={1}>
-        <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} />
+        <OAuthStatusMessage oauthStatus={oauthStatus} mode={mode} startingMessage={startingMessage} forcedMethodMessage={forcedMethodMessage} showPastePrompt={showPastePrompt} pastedCode={pastedCode} setPastedCode={setPastedCode} cursorOffset={cursorOffset} setCursorOffset={setCursorOffset} textInputColumns={textInputColumns} handleSubmitCode={handleSubmitCode} setOAuthStatus={setOAuthStatus} setLoginWithClaudeAi={setLoginWithClaudeAi} setAuthProvider={setAuthProvider} openAiLoginAvailable={openAiLoginAvailable} allowManualCodeEntry={authProvider === 'anthropic'} />
       </Box>
     </Box>;
 }
@@ -343,6 +384,9 @@ type OAuthStatusMessageProps = {
   handleSubmitCode: (value: string, url: string) => void;
   setOAuthStatus: (status: OAuthStatus) => void;
   setLoginWithClaudeAi: (value: boolean) => void;
+  setAuthProvider: (value: IdentityProviderId) => void;
+  openAiLoginAvailable: boolean;
+  allowManualCodeEntry: boolean;
 };
 function OAuthStatusMessage(t0) {
   const $ = _c(51);
@@ -359,94 +403,64 @@ function OAuthStatusMessage(t0) {
     textInputColumns,
     handleSubmitCode,
     setOAuthStatus,
-    setLoginWithClaudeAi
+    setLoginWithClaudeAi,
+    setAuthProvider,
+    openAiLoginAvailable,
+    allowManualCodeEntry
   } = t0;
   switch (oauthStatus.state) {
     case "idle":
       {
-        const t1 = startingMessage ? startingMessage : "Claude Code can be used with your Claude subscription or billed based on API usage through your Console account.";
-        let t2;
-        if ($[0] !== t1) {
-          t2 = <Text bold={true}>{t1}</Text>;
-          $[0] = t1;
-          $[1] = t2;
-        } else {
-          t2 = $[1];
-        }
-        let t3;
-        if ($[2] === Symbol.for("react.memo_cache_sentinel")) {
-          t3 = <Text>Select login method:</Text>;
-          $[2] = t3;
-        } else {
-          t3 = $[2];
-        }
-        let t4;
-        if ($[3] === Symbol.for("react.memo_cache_sentinel")) {
-          t4 = {
-            label: <Text>Claude account with subscription ·{" "}<Text dimColor={true}>Pro, Max, Team, or Enterprise</Text>{false && <Text>{"\n"}<Text color="warning">[ANT-ONLY]</Text>{" "}<Text dimColor={true}>Please use this option unless you need to login to a special org for accessing sensitive data (e.g. customer data, HIPI data) with the Console option</Text></Text>}{"\n"}</Text>,
-            value: "claudeai"
-          };
-          $[3] = t4;
-        } else {
-          t4 = $[3];
-        }
-        let t5;
-        if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
-          t5 = {
-            label: <Text>Anthropic Console account ·{" "}<Text dimColor={true}>API usage billing</Text>{"\n"}</Text>,
-            value: "console"
-          };
-          $[4] = t5;
-        } else {
-          t5 = $[4];
-        }
-        let t6;
-        if ($[5] === Symbol.for("react.memo_cache_sentinel")) {
-          t6 = [t4, t5, {
-            label: <Text>3rd-party platform ·{" "}<Text dimColor={true}>Amazon Bedrock, Microsoft Foundry, or Vertex AI</Text>{"\n"}</Text>,
-            value: "platform"
-          }];
-          $[5] = t6;
-        } else {
-          t6 = $[5];
-        }
-        let t7;
-        if ($[6] !== setLoginWithClaudeAi || $[7] !== setOAuthStatus) {
-          t7 = <Box><Select options={t6} onChange={value_0 => {
-              if (value_0 === "platform") {
-                logEvent("tengu_oauth_platform_selected", {});
-                setOAuthStatus({
-                  state: "platform_setup"
-                });
-              } else {
-                setOAuthStatus({
-                  state: "ready_to_start"
-                });
-                if (value_0 === "claudeai") {
-                  logEvent("tengu_oauth_claudeai_selected", {});
-                  setLoginWithClaudeAi(true);
-                } else {
-                  logEvent("tengu_oauth_console_selected", {});
-                  setLoginWithClaudeAi(false);
-                }
-              }
-            }} /></Box>;
-          $[6] = setLoginWithClaudeAi;
-          $[7] = setOAuthStatus;
-          $[8] = t7;
-        } else {
-          t7 = $[8];
-        }
-        let t8;
-        if ($[9] !== t2 || $[10] !== t7) {
-          t8 = <Box flexDirection="column" gap={1} marginTop={1}>{t2}{t3}{t7}</Box>;
-          $[9] = t2;
-          $[10] = t7;
-          $[11] = t8;
-        } else {
-          t8 = $[11];
-        }
-        return t8;
+        const intro = startingMessage ? startingMessage : openAiLoginAvailable ? "Forge can sign in with subscription login, Console billing, or an OpenAI account. If Codex CLI is already logged in, Forge can reuse that session." : "Forge can be used with subscription login or billed based on API usage through your Console account.";
+        const options = [
+          {
+            label: <Text>Claude account with subscription · <Text dimColor={true}>Pro, Max, Team, or Enterprise</Text>{"\n"}</Text>,
+            value: 'claudeai'
+          },
+          {
+            label: <Text>Anthropic Console account · <Text dimColor={true}>API usage billing</Text>{"\n"}</Text>,
+            value: 'console'
+          },
+          ...(openAiLoginAvailable ? [{
+            label: <Text>OpenAI account · <Text dimColor={true}>Reuse Codex CLI login or browser OAuth directly</Text>{"\n"}</Text>,
+            value: 'openai'
+          }] : []),
+          {
+            label: <Text>3rd-party platform · <Text dimColor={true}>Amazon Bedrock, Microsoft Foundry, or Vertex AI</Text>{"\n"}</Text>,
+            value: 'platform'
+          }
+        ];
+        return <Box flexDirection="column" gap={1} marginTop={1}>
+            <Text bold={true}>{intro}</Text>
+            <Text>Select login method:</Text>
+            <Box><Select options={options} onChange={value => {
+            if (value === 'platform') {
+              logEvent('tengu_oauth_platform_selected', {});
+              setOAuthStatus({
+                state: 'platform_setup'
+              });
+              return;
+            }
+            setOAuthStatus({
+              state: 'ready_to_start'
+            });
+            if (value === 'claudeai') {
+              logEvent('tengu_oauth_claudeai_selected', {});
+              setAuthProvider('anthropic');
+              setLoginWithClaudeAi(true);
+              return;
+            }
+            if (value === 'console') {
+              logEvent('tengu_oauth_console_selected', {});
+              setAuthProvider('anthropic');
+              setLoginWithClaudeAi(false);
+              return;
+            }
+            logEvent('tengu_oauth_openai_selected', {});
+            setAuthProvider('openai');
+            setLoginWithClaudeAi(false);
+          }} /></Box>
+          </Box>;
       }
     case "platform_setup":
       {
@@ -460,7 +474,7 @@ function OAuthStatusMessage(t0) {
         let t2;
         let t3;
         if ($[13] === Symbol.for("react.memo_cache_sentinel")) {
-          t2 = <Text>Claude Code supports Amazon Bedrock, Microsoft Foundry, and Vertex AI. Set the required environment variables, then restart Claude Code.</Text>;
+          t2 = <Text>Forge supports Amazon Bedrock, Microsoft Foundry, and Vertex AI. Set the required environment variables, then restart Forge.</Text>;
           t3 = <Text>If you are part of an enterprise organization, contact your administrator for setup instructions.</Text>;
           $[13] = t2;
           $[14] = t3;
@@ -507,54 +521,17 @@ function OAuthStatusMessage(t0) {
       }
     case "waiting_for_login":
       {
-        let t1;
-        if ($[20] !== forcedMethodMessage) {
-          t1 = forcedMethodMessage && <Box><Text dimColor={true}>{forcedMethodMessage}</Text></Box>;
-          $[20] = forcedMethodMessage;
-          $[21] = t1;
-        } else {
-          t1 = $[21];
-        }
-        let t2;
-        if ($[22] !== showPastePrompt) {
-          t2 = !showPastePrompt && <Box><Spinner /><Text>Opening browser to sign in…</Text></Box>;
-          $[22] = showPastePrompt;
-          $[23] = t2;
-        } else {
-          t2 = $[23];
-        }
-        let t3;
-        if ($[24] !== cursorOffset || $[25] !== handleSubmitCode || $[26] !== oauthStatus.url || $[27] !== pastedCode || $[28] !== setCursorOffset || $[29] !== setPastedCode || $[30] !== showPastePrompt || $[31] !== textInputColumns) {
-          t3 = showPastePrompt && <Box><Text>{PASTE_HERE_MSG}</Text><TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => handleSubmitCode(value, oauthStatus.url)} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" /></Box>;
-          $[24] = cursorOffset;
-          $[25] = handleSubmitCode;
-          $[26] = oauthStatus.url;
-          $[27] = pastedCode;
-          $[28] = setCursorOffset;
-          $[29] = setPastedCode;
-          $[30] = showPastePrompt;
-          $[31] = textInputColumns;
-          $[32] = t3;
-        } else {
-          t3 = $[32];
-        }
-        let t4;
-        if ($[33] !== t1 || $[34] !== t2 || $[35] !== t3) {
-          t4 = <Box flexDirection="column" gap={1}>{t1}{t2}{t3}</Box>;
-          $[33] = t1;
-          $[34] = t2;
-          $[35] = t3;
-          $[36] = t4;
-        } else {
-          t4 = $[36];
-        }
-        return t4;
+        return <Box flexDirection="column" gap={1}>
+            {forcedMethodMessage ? <Box><Text dimColor={true}>{forcedMethodMessage}</Text></Box> : null}
+            {!showPastePrompt ? <Box><Spinner /><Text>Opening browser to sign in…</Text></Box> : null}
+            {allowManualCodeEntry && showPastePrompt ? <Box><Text>{PASTE_HERE_MSG}</Text><TextInput value={pastedCode} onChange={setPastedCode} onSubmit={value => handleSubmitCode(value, oauthStatus.url)} cursorOffset={cursorOffset} onChangeCursorOffset={setCursorOffset} columns={textInputColumns} mask="*" /></Box> : null}
+          </Box>;
       }
     case "creating_api_key":
       {
         let t1;
         if ($[37] === Symbol.for("react.memo_cache_sentinel")) {
-          t1 = <Box flexDirection="column" gap={1}><Box><Spinner /><Text>Creating API key for Claude Code…</Text></Box></Box>;
+          t1 = <Box flexDirection="column" gap={1}><Box><Spinner /><Text>Creating API key for Forge…</Text></Box></Box>;
           $[37] = t1;
         } else {
           t1 = $[37];

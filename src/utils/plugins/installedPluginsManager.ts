@@ -6,7 +6,8 @@
  * - Which plugins are installed globally
  * - Installation metadata (version, timestamps, paths)
  *
- * The enabled/disabled state remains in .claude/settings.json for per-repo control.
+ * The enabled/disabled state remains in .forge/settings.json for per-repo control,
+ * with legacy .claude/settings.json compatibility.
  *
  * Rationale: Installation is global (a plugin is either on disk or not), while
  * enabled/disabled state is per-repository (different projects may want different
@@ -49,6 +50,12 @@ import {
   getSettingsForSource,
 } from '../settings/settings.js'
 import { getPluginById } from './marketplaceManager.js'
+import {
+  FORGE_PLUGIN_METADATA_DIR,
+  LEGACY_CLAUDE_PLUGIN_METADATA_DIR,
+  PLUGIN_MANIFEST_FILENAME,
+  getPreferredPluginManifestPath,
+} from './pluginManifestPaths.js'
 import {
   parsePluginIdentifier,
   settingSourceToScope,
@@ -184,8 +191,8 @@ export function migrateToSinglePluginFile(): void {
 /**
  * Clean up legacy non-versioned cache directories.
  *
- * Legacy cache structure: ~/.claude/plugins/cache/{plugin-name}/
- * Versioned cache structure: ~/.claude/plugins/cache/{marketplace}/{plugin}/{version}/
+ * Legacy cache structure: ~/.forge/plugins/cache/{plugin-name}/
+ * Versioned cache structure: ~/.forge/plugins/cache/{marketplace}/{plugin}/{version}/
  *
  * This function removes legacy directories that are not referenced by any installation.
  */
@@ -285,7 +292,8 @@ function migrateV1ToV2(v1Data: InstalledPluginsFileV1): InstalledPluginsFileV2 {
   const v2Plugins: InstalledPluginsMapV2 = {}
 
   for (const [pluginId, plugin] of Object.entries(v1Data.plugins)) {
-    // V2 format uses versioned cache path: ~/.claude/plugins/cache/{marketplace}/{plugin}/{version}
+    // V2 format uses versioned cache path:
+    // ~/.forge/plugins/cache/{marketplace}/{plugin}/{version}
     // Compute it from pluginId and version instead of using the V1 installPath
     const versionedCachePath = getVersionedCachePath(pluginId, plugin.version)
 
@@ -1012,7 +1020,7 @@ function getPluginVersionFromManifest(
   pluginId: string,
 ): string {
   const fs = getFsImplementation()
-  const manifestPath = join(pluginCachePath, '.claude-plugin', 'plugin.json')
+  const manifestPath = getPreferredPluginManifestPath(pluginCachePath, true)
 
   try {
     const manifestContent = fs.readFileSync(manifestPath, { encoding: 'utf-8' })
@@ -1220,8 +1228,12 @@ export async function migrateFromEnabledPlugins(): Promise<void> {
 
           installPath = pluginCachePath
 
-          // Only read manifest if the .claude-plugin dir is present
-          if (dirEntries.includes('.claude-plugin')) {
+          // Only read manifest if a supported metadata layout is present
+          if (
+            dirEntries.includes(FORGE_PLUGIN_METADATA_DIR) ||
+            dirEntries.includes(LEGACY_CLAUDE_PLUGIN_METADATA_DIR) ||
+            dirEntries.includes(PLUGIN_MANIFEST_FILENAME)
+          ) {
             version = getPluginVersionFromManifest(pluginCachePath, pluginId)
           }
 

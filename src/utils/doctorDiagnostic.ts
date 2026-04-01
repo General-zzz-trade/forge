@@ -15,6 +15,8 @@ import { isEnvTruthy } from './envUtils.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { getFsImplementation } from './fsOperations.js'
 import {
+  getLocalForgePath,
+  getLocalInstallDir,
   getShellType,
   isRunningFromLocalInstallation,
   localInstallationExists,
@@ -28,6 +30,7 @@ import {
   detectPacman,
   detectRpm,
   detectWinget,
+  getKnownNpmPackageNames,
   getPackageManager,
 } from './nativeInstaller/packageManagers.js'
 import { getPlatform } from './platform.js'
@@ -162,7 +165,7 @@ async function getInstallationPath(): Promise<string> {
     }
 
     try {
-      const path = await which('claude')
+      const path = (await which('forge')) || (await which('claude'))
       if (path) {
         return path
       }
@@ -171,6 +174,12 @@ async function getInstallationPath(): Promise<string> {
     }
 
     // If we can't find it, check common locations
+    try {
+      await getFsImplementation().stat(join(homedir(), '.local/bin/forge'))
+      return join(homedir(), '.local/bin/forge')
+    } catch {
+      // Not found
+    }
     try {
       await getFsImplementation().stat(join(homedir(), '.local/bin/claude'))
       return join(homedir(), '.local/bin/claude')
@@ -209,16 +218,13 @@ async function detectMultipleInstallations(): Promise<
   const installations: Array<{ type: string; path: string }> = []
 
   // Check for local installation
-  const localPath = join(homedir(), '.claude', 'local')
+  const localPath = getLocalInstallDir()
   if (await localInstallationExists()) {
     installations.push({ type: 'npm-local', path: localPath })
   }
 
   // Check for global npm installation
-  const packagesToCheck = ['@anthropic-ai/claude-code']
-  if (MACRO.PACKAGE_URL && MACRO.PACKAGE_URL !== '@anthropic-ai/claude-code') {
-    packagesToCheck.push(MACRO.PACKAGE_URL)
-  }
+  const packagesToCheck = getKnownNpmPackageNames()
   const npmResult = await execFileNoThrow('npm', [
     '-g',
     'config',
@@ -229,24 +235,30 @@ async function detectMultipleInstallations(): Promise<
     const npmPrefix = npmResult.stdout.trim()
     const isWindows = getPlatform() === 'windows'
 
-    // First check for active installations via bin/claude
-    // Linux / macOS have prefix/bin/claude and prefix/lib/node_modules
-    // Windows has prefix/claude and prefix/node_modules
-    const globalBinPath = isWindows
-      ? join(npmPrefix, 'claude')
-      : join(npmPrefix, 'bin', 'claude')
+    // First check for active installations via the global launcher.
+    // Linux / macOS have prefix/bin/{forge|claude} and prefix/lib/node_modules.
+    // Windows has prefix/{forge|claude} and prefix/node_modules.
+    const globalBinPaths = isWindows
+      ? [join(npmPrefix, 'forge'), join(npmPrefix, 'claude')]
+      : [
+          join(npmPrefix, 'bin', 'forge'),
+          join(npmPrefix, 'bin', 'claude'),
+        ]
 
-    let globalBinExists = false
-    try {
-      await fs.stat(globalBinPath)
-      globalBinExists = true
-    } catch {
-      // Not found
+    let globalBinPath: string | null = null
+    for (const candidatePath of globalBinPaths) {
+      try {
+        await fs.stat(candidatePath)
+        globalBinPath = candidatePath
+        break
+      } catch {
+        // Not found
+      }
     }
 
-    if (globalBinExists) {
+    if (globalBinPath) {
       // Check if this is actually a Homebrew cask installation, not npm-global
-      // When npm is installed via Homebrew, both can exist at /opt/homebrew/bin/claude
+      // When npm is installed via Homebrew, both can exist at /opt/homebrew/bin/forge
       // We need to resolve the symlink to see where it actually points
       let isCurrentHomebrewInstallation = false
 
@@ -267,7 +279,7 @@ async function detectMultipleInstallations(): Promise<
         installations.push({ type: 'npm-global', path: globalBinPath })
       }
     } else {
-      // If no bin/claude exists, check for orphaned packages (no bin/claude symlink)
+      // If no launcher exists, check for orphaned packages with no shim/symlink.
       for (const packageName of packagesToCheck) {
         const globalPackagePath = isWindows
           ? join(npmPrefix, 'node_modules', packageName)
@@ -289,25 +301,37 @@ async function detectMultipleInstallations(): Promise<
   // Check for native installation
 
   // Check common native installation paths
-  const nativeBinPath = join(homedir(), '.local', 'bin', 'claude')
-  try {
-    await fs.stat(nativeBinPath)
-    installations.push({ type: 'native', path: nativeBinPath })
-  } catch {
-    // Not found
+  const nativeBinPaths = [
+    join(homedir(), '.local', 'bin', 'forge'),
+    join(homedir(), '.local', 'bin', 'claude'),
+  ]
+  for (const nativeBinPath of nativeBinPaths) {
+    try {
+      await fs.stat(nativeBinPath)
+      installations.push({ type: 'native', path: nativeBinPath })
+      break
+    } catch {
+      // Not found
+    }
   }
 
   // Also check if config indicates native installation
   const config = getGlobalConfig()
   if (config.installMethod === 'native') {
-    const nativeDataPath = join(homedir(), '.local', 'share', 'claude')
-    try {
-      await fs.stat(nativeDataPath)
-      if (!installations.some(i => i.type === 'native')) {
-        installations.push({ type: 'native', path: nativeDataPath })
+    const nativeDataPaths = [
+      join(homedir(), '.local', 'share', 'forge'),
+      join(homedir(), '.local', 'share', 'claude'),
+    ]
+    for (const nativeDataPath of nativeDataPaths) {
+      try {
+        await fs.stat(nativeDataPath)
+        if (!installations.some(i => i.type === 'native')) {
+          installations.push({ type: 'native', path: nativeDataPath })
+        }
+        break
+      } catch {
+        // Not found
       }
-    } catch {
-      // Not found
     }
   }
 
@@ -435,14 +459,14 @@ async function detectConfigurationIssues(
     if (type === 'npm-local' && config.installMethod !== 'local') {
       warnings.push({
         issue: `Running from local installation but config install method is '${config.installMethod}'`,
-        fix: 'Consider using native installation: claude install',
+        fix: 'Consider using native installation: forge install',
       })
     }
 
     if (type === 'native' && config.installMethod !== 'native') {
       warnings.push({
         issue: `Running native installation but config install method is '${config.installMethod}'`,
-        fix: 'Run claude install to update configuration',
+        fix: 'Run forge install to update configuration',
       })
     }
   }
@@ -450,32 +474,33 @@ async function detectConfigurationIssues(
   if (type === 'npm-global' && (await localInstallationExists())) {
     warnings.push({
       issue: 'Local installation exists but not being used',
-      fix: 'Consider using native installation: claude install',
+      fix: 'Consider using native installation: forge install',
     })
   }
 
   const existingAlias = await findClaudeAlias()
   const validAlias = await findValidClaudeAlias()
+  const localForgePathForDisplay = getLocalForgePath().replace(homedir(), '~')
 
   // Check if running local installation but it's not in PATH
   if (type === 'npm-local') {
-    // Check if claude is already accessible via PATH
-    const whichResult = await which('claude')
-    const claudeInPath = !!whichResult
+    // Check if the CLI is already accessible via PATH.
+    const whichResult = (await which('forge')) || (await which('claude'))
+    const cliInPath = !!whichResult
 
-    // Only show warning if claude is NOT in PATH AND no valid alias exists
-    if (!claudeInPath && !validAlias) {
+    // Only show warning if the CLI is NOT in PATH AND no valid alias exists.
+    if (!cliInPath && !validAlias) {
       if (existingAlias) {
         // Alias exists but points to invalid target
         warnings.push({
           issue: 'Local installation not accessible',
-          fix: `Alias exists but points to invalid target: ${existingAlias}. Update alias: alias claude="~/.claude/local/claude"`,
+          fix: `Alias exists but points to invalid target: ${existingAlias}. Update alias: alias forge="${localForgePathForDisplay}"`,
         })
       } else {
         // No alias exists and not in PATH
         warnings.push({
           issue: 'Local installation not accessible',
-          fix: 'Create alias: alias claude="~/.claude/local/claude"',
+          fix: `Create alias: alias forge="${localForgePathForDisplay}"`,
         })
       }
     }
@@ -536,13 +561,7 @@ export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
 
     for (const install of npmInstalls) {
       if (install.type === 'npm-global') {
-        let uninstallCmd = 'npm -g uninstall @anthropic-ai/claude-code'
-        if (
-          MACRO.PACKAGE_URL &&
-          MACRO.PACKAGE_URL !== '@anthropic-ai/claude-code'
-        ) {
-          uninstallCmd += ` && npm -g uninstall ${MACRO.PACKAGE_URL}`
-        }
+        const uninstallCmd = `npm -g uninstall ${getKnownNpmPackageNames().join(' ')}`
         warnings.push({
           issue: `Leftover npm global installation at ${install.path}`,
           fix: `Run: ${uninstallCmd}`,
@@ -580,7 +599,7 @@ export async function getDoctorDiagnostic(): Promise<DiagnosticInfo> {
     if (!hasUpdatePermissions && !getAutoUpdaterDisabledReason()) {
       warnings.push({
         issue: 'Insufficient permissions for auto-updates',
-        fix: 'Do one of: (1) Re-install node without sudo, or (2) Use `claude install` for native installation',
+        fix: 'Do one of: (1) Re-install node without sudo, or (2) Use `forge install` for native installation',
       })
     }
   }

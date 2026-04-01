@@ -13,6 +13,11 @@ import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { isFsInaccessible } from './errors.js'
 import { normalizePathForComparison } from './file.js'
+import {
+  getPreferredManagedConfigSubdir,
+  getPreferredProjectConfigSubdir,
+  getProjectConfigSubdirCandidates,
+} from './forgePaths.js'
 import type { FrontmatterData } from './frontmatterParser.js'
 import { parseFrontmatter } from './frontmatterParser.js'
 import { findCanonicalGitRoot, findGitRoot } from './git.js'
@@ -221,15 +226,18 @@ function resolveStopBoundary(cwd: string): string | null {
 
 /**
  * Traverses from the current directory up to the git root (or home directory if not in a git repo),
- * collecting all .claude directories along the way.
+ * collecting all project config directories along the way, preferring .forge
+ * and falling back to legacy .claude.
  *
- * Stopping at git root prevents commands/skills from parent directories outside the repository
- * from leaking into projects. For example, if ~/projects/.claude/commands/ exists, it won't
- * appear in ~/projects/my-repo/ if my-repo is a git repository.
+ * Stopping at git root prevents commands/skills from parent directories
+ * outside the repository from leaking into projects. For example, if
+ * ~/projects/.forge/commands/ exists, it won't appear in ~/projects/my-repo/
+ * if my-repo is a git repository.
  *
  * @param subdir Subdirectory (eg. "commands", "agents")
  * @param cwd Current working directory to start from
- * @returns Array of directory paths containing .claude/subdir, from most specific (cwd) to least specific
+ * @returns Array of directory paths containing the preferred project config
+ * subdir, from most specific (cwd) to least specific
  */
 export function getProjectDirsUpToHome(
   subdir: ClaudeConfigDirectory,
@@ -250,7 +258,7 @@ export function getProjectDirsUpToHome(
       break
     }
 
-    const claudeSubdir = join(current, '.claude', subdir)
+    const configSubdir = getPreferredProjectConfigSubdir(current, subdir)
     // Filter to existing dirs. This is a perf filter (avoids spawning
     // ripgrep on non-existent dirs downstream) and the worktree fallback
     // in loadMarkdownFilesForSubdir relies on it. statSync + explicit error
@@ -258,8 +266,8 @@ export function getProjectDirsUpToHome(
     // than silently swallowing them. Downstream loadMarkdownFiles handles
     // the TOCTOU window (dir disappearing before read) gracefully.
     try {
-      statSync(claudeSubdir)
-      dirs.push(claudeSubdir)
+      statSync(configSubdir)
+      dirs.push(configSubdir)
     } catch (e: unknown) {
       if (!isFsInaccessible(e)) throw e
     }
@@ -301,17 +309,21 @@ export const loadMarkdownFilesForSubdir = memoize(
   ): Promise<MarkdownFile[]> {
     const searchStartTime = Date.now()
     const userDir = join(getClaudeConfigHomeDir(), subdir)
-    const managedDir = join(getManagedFilePath(), '.claude', subdir)
+    const managedDir = getPreferredManagedConfigSubdir(
+      getManagedFilePath(),
+      subdir,
+    )
     const projectDirs = getProjectDirsUpToHome(subdir, cwd)
 
-    // For git worktrees where the worktree does NOT have .claude/<subdir> checked
-    // out (e.g. sparse-checkout), fall back to the main repository's copy.
+    // For git worktrees where the worktree does NOT have the preferred config
+    // subdir checked out (e.g. sparse-checkout), fall back to the main
+    // repository's copy.
     // getProjectDirsUpToHome stops at the worktree root (where the .git file is),
     // so it never sees the main repo on its own.
     //
-    // Only add the main repo's copy when the worktree root's .claude/<subdir>
+    // Only add the main repo's copy when the worktree root's config subdir
     // is absent. A standard `git worktree add` checks out the full tree, so the
-    // worktree already has identical .claude/<subdir> content — loading the main
+    // worktree already has identical config content — loading the main
     // repo's copy too would duplicate every command/agent/skill
     // (anthropics/claude-code#29599, #28182, #26992).
     //
@@ -320,16 +332,21 @@ export const loadMarkdownFilesForSubdir = memoize(
     const gitRoot = findGitRoot(cwd)
     const canonicalRoot = findCanonicalGitRoot(cwd)
     if (gitRoot && canonicalRoot && canonicalRoot !== gitRoot) {
-      const worktreeSubdir = normalizePathForComparison(
-        join(gitRoot, '.claude', subdir),
-      )
+      const worktreeSubdirCandidates = getProjectConfigSubdirCandidates(
+        gitRoot,
+        subdir,
+      ).map(candidate => normalizePathForComparison(candidate))
       const worktreeHasSubdir = projectDirs.some(
-        dir => normalizePathForComparison(dir) === worktreeSubdir,
+        dir =>
+          worktreeSubdirCandidates.includes(normalizePathForComparison(dir)),
       )
       if (!worktreeHasSubdir) {
-        const mainClaudeSubdir = join(canonicalRoot, '.claude', subdir)
-        if (!projectDirs.includes(mainClaudeSubdir)) {
-          projectDirs.push(mainClaudeSubdir)
+        const mainProjectSubdir = getPreferredProjectConfigSubdir(
+          canonicalRoot,
+          subdir,
+        )
+        if (!projectDirs.includes(mainProjectSubdir)) {
+          projectDirs.push(mainProjectSubdir)
         }
       }
     }

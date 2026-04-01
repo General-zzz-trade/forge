@@ -1,9 +1,14 @@
 import axios, { type AxiosRequestConfig, type AxiosResponse } from 'axios'
 import { randomUUID } from 'crypto'
-import { getOauthConfig } from 'src/constants/oauth.js'
 import { getOrganizationUUID } from 'src/services/oauth/client.js'
+import {
+  getActiveForgeSession,
+  isUsingNativeOpenAISession,
+  requireAuthenticatedApiBaseUrl,
+} from 'src/services/auth/runtime.js'
 import z from 'zod/v4'
 import { getClaudeAIOAuthTokens } from '../auth.js'
+import { getGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
 import { parseGitHubRepository } from '../detectRepository.js'
 import { errorMessage, toError } from '../errors.js'
@@ -181,20 +186,37 @@ export type CodeSession = z.infer<ReturnType<typeof CodeSessionSchema>>
 export async function prepareApiRequest(): Promise<{
   accessToken: string
   orgUUID: string
+  baseUrl: string
 }> {
-  const accessToken = getClaudeAIOAuthTokens()?.accessToken
-  if (accessToken === undefined) {
+  if (isUsingNativeOpenAISession()) {
     throw new Error(
-      'Claude Code web sessions require authentication with a Claude.ai account. API key authentication is not sufficient. Please run /login to authenticate, or check your authentication status with /status.',
+      'Native OpenAI sessions do not support Forge or Anthropic remote teleport APIs.',
     )
   }
 
-  const orgUUID = await getOrganizationUUID()
-  if (!orgUUID) {
-    throw new Error('Unable to get organization UUID')
+  const accessToken =
+    getActiveForgeSession()?.accessToken ??
+    getClaudeAIOAuthTokens()?.accessToken
+  if (accessToken === undefined) {
+    throw new Error(
+      'Forge remote features require an authenticated account session. API key authentication is not sufficient. Please run forge auth login, or check your authentication status with forge auth status.',
+    )
   }
 
-  return { accessToken, orgUUID }
+  const orgUUID =
+    getGlobalConfig().oauthAccount?.organizationUuid ??
+    (await getOrganizationUUID())
+  if (!orgUUID) {
+    throw new Error(
+      'Unable to get organization UUID for the current authenticated session',
+    )
+  }
+
+  return {
+    accessToken,
+    orgUUID,
+    baseUrl: requireAuthenticatedApiBaseUrl(),
+  }
 }
 
 /**
@@ -204,9 +226,9 @@ export async function prepareApiRequest(): Promise<{
 export async function fetchCodeSessionsFromSessionsAPI(): Promise<
   CodeSession[]
 > {
-  const { accessToken, orgUUID } = await prepareApiRequest()
+  const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
-  const url = `${getOauthConfig().BASE_API_URL}/v1/sessions`
+  const url = `${baseUrl}/v1/sessions`
 
   try {
     const headers = {
@@ -289,9 +311,9 @@ export function getOAuthHeaders(accessToken: string): Record<string, string> {
 export async function fetchSession(
   sessionId: string,
 ): Promise<SessionResource> {
-  const { accessToken, orgUUID } = await prepareApiRequest()
+  const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
-  const url = `${getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}`
+  const url = `${baseUrl}/v1/sessions/${sessionId}`
   const headers = {
     ...getOAuthHeaders(accessToken),
     'anthropic-beta': 'ccr-byoc-2025-07-29',
@@ -364,9 +386,9 @@ export async function sendEventToRemoteSession(
   opts?: { uuid?: string },
 ): Promise<boolean> {
   try {
-    const { accessToken, orgUUID } = await prepareApiRequest()
+    const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
-    const url = `${getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}/events`
+    const url = `${baseUrl}/v1/sessions/${sessionId}/events`
     const headers = {
       ...getOAuthHeaders(accessToken),
       'anthropic-beta': 'ccr-byoc-2025-07-29',
@@ -427,9 +449,9 @@ export async function updateSessionTitle(
   title: string,
 ): Promise<boolean> {
   try {
-    const { accessToken, orgUUID } = await prepareApiRequest()
+    const { accessToken, orgUUID, baseUrl } = await prepareApiRequest()
 
-    const url = `${getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}`
+    const url = `${baseUrl}/v1/sessions/${sessionId}`
     const headers = {
       ...getOAuthHeaders(accessToken),
       'anthropic-beta': 'ccr-byoc-2025-07-29',

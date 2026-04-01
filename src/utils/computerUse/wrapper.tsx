@@ -4,7 +4,7 @@
  * (same pattern as Chrome's rendering overrides, plus `.call()`).
  *
  * The wrapper-closure logic (build overrides fresh, lock gate, permission
- * merge, screenshot stash) lives in `@ant/computer-use-mcp`'s
+ * merge, screenshot stash) lives in Forge's computer-use MCP runtime
  * `bindSessionContext`. This file binds it once per process,
  * caches the dispatcher, and updates a per-call ref for the pieces of
  * `ToolUseContext` that vary per-call (`abortController`, `setToolJSX`,
@@ -16,7 +16,7 @@
  * GrowthBook gate `tengu_malort_pedway` (see gates.ts).
  */
 
-import { bindSessionContext, type ComputerUseSessionContext, type CuCallToolResult, type CuPermissionRequest, type CuPermissionResponse, DEFAULT_GRANT_FLAGS, type ScreenshotDims } from '@ant/computer-use-mcp';
+import { bindSessionContext, type ComputerUseSessionContext, type CuCallToolResult, type CuPermissionRequest, type CuPermissionResponse, DEFAULT_GRANT_FLAGS, type ScreenshotDims } from './forgeComputerUse.js';
 import * as React from 'react';
 import { getSessionId } from '../../bootstrap/state.js';
 import { ComputerUseApproval } from '../../components/permissions/ComputerUseApproval/ComputerUseApproval.js';
@@ -42,7 +42,7 @@ type Binding = {
  * `setToolJSX`, `sendOSNotification`) are always current.
  *
  * Module-level `let` is a deliberate exception to the no-module-scope-state
- * rule (src/CLAUDE.md): the dispatcher closure must persist across calls so
+ * rule (src/FORGE.md): the dispatcher closure must persist across calls so
  * its internal screenshot blob survives, but `ToolUseContext` is per-call.
  * Tests will need to either inject the cache or run serially.
  */
@@ -54,7 +54,7 @@ function tuc(): ToolUseContext {
   return currentToolUseContext!;
 }
 function formatLockHeld(holder: string): string {
-  return `Computer use is in use by another Claude session (${holder.slice(0, 8)}…). Wait for that session to finish or run /exit there.`;
+  return `Computer use is in use by another Forge session (${holder.slice(0, 8)}…). Wait for that session to finish or run /exit there.`;
 }
 export function buildSessionContext(): ComputerUseSessionContext {
   return {
@@ -219,7 +219,7 @@ export function buildSessionContext(): ComputerUseSessionContext {
           tuc().abortController.abort();
         });
         tuc().sendOSNotification?.({
-          message: escRegistered ? 'Claude is using your computer · press Esc to stop' : 'Claude is using your computer · press Ctrl+C to stop',
+          message: escRegistered ? 'Forge is using your computer · press Esc to stop' : 'Forge is using your computer · press Ctrl+C to stop',
           notificationType: 'computer_use_enter'
         });
       }
@@ -259,7 +259,7 @@ export function getComputerUseMCPToolOverrides(toolName: string): ComputerUseMCP
       logForDebugging(`[Computer Use MCP] ${toolName} error_kind=${telemetry.error_kind}`);
     }
 
-    // MCP content blocks → Anthropic API blocks. CU only produces text and
+    // MCP content blocks → model API blocks. CU only produces text and
     // pre-sized JPEG (executor.ts computeTargetDims → targetImageSize), so
     // unlike the generic MCP path there's no resize needed — the MCP image
     // shape just maps to the API's base64-source shape. The package's result

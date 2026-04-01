@@ -3,13 +3,18 @@ import type { Command } from '../commands.js';
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js';
 const statusline = {
   type: 'prompt',
-  description: "Set up Claude Code's status line UI",
+  description: "Set up Forge's status line UI",
   contentLength: 0,
   // Dynamic content
   aliases: [],
   name: 'statusline',
   progressMessage: 'setting up statusLine',
-  allowedTools: [AGENT_TOOL_NAME, 'Read(~/**)', 'Edit(~/.claude/settings.json)'],
+  allowedTools: [
+    AGENT_TOOL_NAME,
+    'Read(~/**)',
+    'Edit(~/.forge/settings.json)',
+    'Edit(~/.claude/settings.json)',
+  ],
   source: 'builtin',
   disableNonInteractive: true,
   async getPromptForCommand(args): Promise<ContentBlockParam[]> {

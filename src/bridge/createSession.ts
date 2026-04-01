@@ -4,6 +4,28 @@ import { errorMessage } from '../utils/errors.js'
 import { extractErrorDetail } from './debugUtils.js'
 import { toCompatSessionId } from './sessionIdCompat.js'
 
+async function resolveBridgeSessionAuth(opts?: {
+  baseUrl?: string
+  getAccessToken?: () => string | undefined
+}): Promise<{ accessToken: string; orgUUID: string; baseUrl: string } | null> {
+  const { prepareApiRequest } = await import('../utils/teleport/api.js')
+
+  try {
+    const prepared = await prepareApiRequest()
+    const accessToken = opts?.getAccessToken?.() ?? prepared.accessToken
+    if (!accessToken) {
+      return null
+    }
+    return {
+      accessToken,
+      orgUUID: prepared.orgUUID,
+      baseUrl: opts?.baseUrl ?? prepared.baseUrl,
+    }
+  } catch {
+    return null
+  }
+}
+
 type GitSource = {
   type: 'git_repository'
   url: string
@@ -52,27 +74,21 @@ export async function createBridgeSession({
   getAccessToken?: () => string | undefined
   permissionMode?: string
 }): Promise<string | null> {
-  const { getClaudeAIOAuthTokens } = await import('../utils/auth.js')
-  const { getOrganizationUUID } = await import('../services/oauth/client.js')
-  const { getOauthConfig } = await import('../constants/oauth.js')
   const { getOAuthHeaders } = await import('../utils/teleport/api.js')
   const { parseGitHubRepository } = await import('../utils/detectRepository.js')
   const { getDefaultBranch } = await import('../utils/git.js')
   const { getMainLoopModel } = await import('../utils/model/model.js')
   const { default: axios } = await import('axios')
 
-  const accessToken =
-    getAccessToken?.() ?? getClaudeAIOAuthTokens()?.accessToken
-  if (!accessToken) {
+  const auth = await resolveBridgeSessionAuth({
+    baseUrl: baseUrlOverride,
+    getAccessToken,
+  })
+  if (!auth) {
     logForDebugging('[bridge] No access token for session creation')
     return null
   }
-
-  const orgUUID = await getOrganizationUUID()
-  if (!orgUUID) {
-    logForDebugging('[bridge] No org UUID for session creation')
-    return null
-  }
+  const { accessToken, orgUUID, baseUrl } = auth
 
   // Build git source and outcome context
   let gitSource: GitSource | null = null
@@ -141,7 +157,7 @@ export async function createBridgeSession({
     'x-organization-uuid': orgUUID,
   }
 
-  const url = `${baseUrlOverride ?? getOauthConfig().BASE_API_URL}/v1/sessions`
+  const url = `${baseUrl}/v1/sessions`
   let response
   try {
     response = await axios.post(url, requestBody, {
@@ -191,24 +207,15 @@ export async function getBridgeSession(
   sessionId: string,
   opts?: { baseUrl?: string; getAccessToken?: () => string | undefined },
 ): Promise<{ environment_id?: string; title?: string } | null> {
-  const { getClaudeAIOAuthTokens } = await import('../utils/auth.js')
-  const { getOrganizationUUID } = await import('../services/oauth/client.js')
-  const { getOauthConfig } = await import('../constants/oauth.js')
   const { getOAuthHeaders } = await import('../utils/teleport/api.js')
   const { default: axios } = await import('axios')
 
-  const accessToken =
-    opts?.getAccessToken?.() ?? getClaudeAIOAuthTokens()?.accessToken
-  if (!accessToken) {
+  const auth = await resolveBridgeSessionAuth(opts)
+  if (!auth) {
     logForDebugging('[bridge] No access token for session fetch')
     return null
   }
-
-  const orgUUID = await getOrganizationUUID()
-  if (!orgUUID) {
-    logForDebugging('[bridge] No org UUID for session fetch')
-    return null
-  }
+  const { accessToken, orgUUID, baseUrl } = auth
 
   const headers = {
     ...getOAuthHeaders(accessToken),
@@ -216,7 +223,7 @@ export async function getBridgeSession(
     'x-organization-uuid': orgUUID,
   }
 
-  const url = `${opts?.baseUrl ?? getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}`
+  const url = `${baseUrl}/v1/sessions/${sessionId}`
   logForDebugging(`[bridge] Fetching session ${sessionId}`)
 
   let response
@@ -268,24 +275,15 @@ export async function archiveBridgeSession(
     timeoutMs?: number
   },
 ): Promise<void> {
-  const { getClaudeAIOAuthTokens } = await import('../utils/auth.js')
-  const { getOrganizationUUID } = await import('../services/oauth/client.js')
-  const { getOauthConfig } = await import('../constants/oauth.js')
   const { getOAuthHeaders } = await import('../utils/teleport/api.js')
   const { default: axios } = await import('axios')
 
-  const accessToken =
-    opts?.getAccessToken?.() ?? getClaudeAIOAuthTokens()?.accessToken
-  if (!accessToken) {
+  const auth = await resolveBridgeSessionAuth(opts)
+  if (!auth) {
     logForDebugging('[bridge] No access token for session archive')
     return
   }
-
-  const orgUUID = await getOrganizationUUID()
-  if (!orgUUID) {
-    logForDebugging('[bridge] No org UUID for session archive')
-    return
-  }
+  const { accessToken, orgUUID, baseUrl } = auth
 
   const headers = {
     ...getOAuthHeaders(accessToken),
@@ -293,7 +291,7 @@ export async function archiveBridgeSession(
     'x-organization-uuid': orgUUID,
   }
 
-  const url = `${opts?.baseUrl ?? getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}/archive`
+  const url = `${baseUrl}/v1/sessions/${sessionId}/archive`
   logForDebugging(`[bridge] Archiving session ${sessionId}`)
 
   const response = await axios.post(
@@ -329,24 +327,15 @@ export async function updateBridgeSessionTitle(
   title: string,
   opts?: { baseUrl?: string; getAccessToken?: () => string | undefined },
 ): Promise<void> {
-  const { getClaudeAIOAuthTokens } = await import('../utils/auth.js')
-  const { getOrganizationUUID } = await import('../services/oauth/client.js')
-  const { getOauthConfig } = await import('../constants/oauth.js')
   const { getOAuthHeaders } = await import('../utils/teleport/api.js')
   const { default: axios } = await import('axios')
 
-  const accessToken =
-    opts?.getAccessToken?.() ?? getClaudeAIOAuthTokens()?.accessToken
-  if (!accessToken) {
+  const auth = await resolveBridgeSessionAuth(opts)
+  if (!auth) {
     logForDebugging('[bridge] No access token for session title update')
     return
   }
-
-  const orgUUID = await getOrganizationUUID()
-  if (!orgUUID) {
-    logForDebugging('[bridge] No org UUID for session title update')
-    return
-  }
+  const { accessToken, orgUUID, baseUrl } = auth
 
   const headers = {
     ...getOAuthHeaders(accessToken),
@@ -358,7 +347,7 @@ export async function updateBridgeSessionTitle(
   // pass raw cse_*; retag here so all callers can pass whatever they hold.
   // Idempotent for v1's session_* and bridgeMain's pre-converted compatSessionId.
   const compatId = toCompatSessionId(sessionId)
-  const url = `${opts?.baseUrl ?? getOauthConfig().BASE_API_URL}/v1/sessions/${compatId}`
+  const url = `${baseUrl}/v1/sessions/${compatId}`
   logForDebugging(`[bridge] Updating session title: ${compatId} → ${title}`)
 
   try {

@@ -231,6 +231,9 @@ export class StructuredIO {
         content = content.slice(newline + 1)
         const message = await this.processLine(line)
         if (message) {
+          logForDebugging(
+            `[structuredIO] yielding ${message.type} message from newline-delimited input`,
+          )
           logForDiagnosticsNoPII('info', 'cli_stdin_message_parsed', {
             type: message.type,
           })
@@ -248,6 +251,9 @@ export class StructuredIO {
     if (content) {
       const message = await this.processLine(content)
       if (message) {
+        logForDebugging(
+          `[structuredIO] yielding ${message.type} message from trailing input buffer`,
+        )
         yield message
       }
     }

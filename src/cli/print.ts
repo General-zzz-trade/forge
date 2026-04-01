@@ -491,6 +491,7 @@ export async function runHeadless(
     setSDKStatus?: (status: SDKStatus) => void
   },
 ): Promise<void> {
+  logForDebugging('[print.ts] runHeadless entered')
   if (
     process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.CLAUDE_CODE_EXIT_AFTER_FIRST_RENDER)
@@ -678,6 +679,7 @@ export async function runHeadless(
   }
 
   headlessProfilerCheckpoint('before_loadInitialMessages')
+  logForDebugging('[print.ts] loading initial messages')
   const appState = getAppState()
   const {
     messages: initialMessages,
@@ -693,6 +695,9 @@ export async function runHeadless(
     sessionStartHooksPromise: options.sessionStartHooksPromise,
     restoredWorkerState: structuredIO.restoredWorkerState,
   })
+  logForDebugging(
+    `[print.ts] initial messages loaded count=${initialMessages.length}`,
+  )
 
   // SessionStart hooks can emit initialUserMessage — the first user turn for
   // headless orchestrator sessions where stdin is empty and additionalContext
@@ -838,7 +843,9 @@ export async function runHeadless(
 
   // Ensure model strings are initialized before generating model options.
   // For Bedrock users, this waits for the profile fetch to get correct region strings.
+  logForDebugging('[print.ts] ensuring model strings are initialized')
   await ensureModelStringsInitialized()
+  logForDebugging('[print.ts] model strings initialized')
   headlessProfilerCheckpoint('after_modelStrings')
 
   // UDS inbox store registration is deferred until after `run` is defined
@@ -861,6 +868,7 @@ export async function runHeadless(
       : null
 
   headlessProfilerCheckpoint('before_runHeadlessStreaming')
+  logForDebugging('[print.ts] starting runHeadlessStreaming consumer')
   for await (const message of runHeadlessStreaming(
     structuredIO,
     appState.mcp.clients,
@@ -1864,9 +1872,11 @@ function runHeadlessStreaming(
 
   const run = async () => {
     if (running) {
+      logForDebugging('[print.ts] run() skipped because a turn is already active')
       return
     }
 
+    logForDebugging('[print.ts] run() starting')
     running = true
     runPhase = undefined
     notifySessionStateChanged('running')
@@ -1933,6 +1943,9 @@ function runHeadlessStreaming(
       // into a single follow-up turn instead of N separate turns.
       const drainCommandQueue = async () => {
         while ((command = dequeue(isMainThread))) {
+          logForDebugging(
+            `[print.ts] dequeued command mode=${command.mode}${command.uuid ? ` uuid=${command.uuid}` : ''}`,
+          )
           if (
             command.mode !== 'prompt' &&
             command.mode !== 'orphaned-permission' &&
@@ -2143,6 +2156,9 @@ function runHeadlessStreaming(
           // const-capture: TS loses `while ((command = dequeue()))` narrowing
           // inside the closure.
           const cmd = command
+          logForDebugging(
+            `[print.ts] entering ask() mode=${cmd.mode}${cmd.uuid ? ` uuid=${cmd.uuid}` : ''}`,
+          )
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               commands: uniqBy(
@@ -4107,6 +4123,9 @@ function runHeadlessStreaming(
         uuid: message.uuid,
         priority: message.priority,
       })
+      logForDebugging(
+        `[print.ts] enqueued user message${message.uuid ? ` uuid=${message.uuid}` : ''}${message.priority ? ` priority=${message.priority}` : ''}`,
+      )
       // Increment prompt count for attribution tracking and save snapshot
       // The snapshot persists promptCount so it survives compaction
       if (feature('COMMIT_ATTRIBUTION')) {
@@ -5036,7 +5055,7 @@ async function loadInitialMessages(
       )
       if (!parsedSessionId) {
         let errorMessage =
-          'Error: --resume requires a valid session ID when used with --print. Usage: claude -p --resume <session-id>'
+          'Error: --resume requires a valid session ID when used with --print. Usage: forge -p --resume <session-id>'
         if (typeof options.resume === 'string') {
           errorMessage += `. Session IDs must be in UUID format (e.g., 550e8400-e29b-41d4-a716-446655440000). Provided value "${options.resume}" is not a valid UUID`
         }

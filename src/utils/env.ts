@@ -3,12 +3,25 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { fileSuffixForOauthConfig } from '../constants/oauth.js'
 import { isRunningWithBun } from './bundledMode.js'
-import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
+import {
+  CLAUDE_CONFIG_DIR_ENV,
+  FORGE_CONFIG_DIR_ENV,
+  getClaudeConfigHomeDir,
+  isEnvTruthy,
+} from './envUtils.js'
 import { findExecutable } from './findExecutable.js'
 import { getFsImplementation } from './fsOperations.js'
 import { which } from './which.js'
 
 type Platform = 'win32' | 'darwin' | 'linux'
+
+function getGlobalConfigBaseDir(): string {
+  return (
+    process.env[FORGE_CONFIG_DIR_ENV] ??
+    process.env[CLAUDE_CONFIG_DIR_ENV] ??
+    homedir()
+  )
+}
 
 // Config and data paths
 export const getGlobalClaudeFile = memoize((): string => {
@@ -21,8 +34,17 @@ export const getGlobalClaudeFile = memoize((): string => {
     return join(getClaudeConfigHomeDir(), '.config.json')
   }
 
-  const filename = `.claude${fileSuffixForOauthConfig()}.json`
-  return join(process.env.CLAUDE_CONFIG_DIR || homedir(), filename)
+  const baseDir = getGlobalConfigBaseDir()
+  const forgePath = join(baseDir, `.forge${fileSuffixForOauthConfig()}.json`)
+  const legacyPath = join(baseDir, `.claude${fileSuffixForOauthConfig()}.json`)
+
+  if (getFsImplementation().existsSync(forgePath)) {
+    return forgePath
+  }
+  if (getFsImplementation().existsSync(legacyPath)) {
+    return legacyPath
+  }
+  return forgePath
 })
 
 const hasInternetAccess = memoize(async (): Promise<boolean> => {

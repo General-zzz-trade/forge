@@ -1,5 +1,5 @@
 import { mkdir, open, unlink } from 'fs/promises'
-import { join } from 'path'
+import { join, relative } from 'path'
 import type { SettingSource } from 'src/utils/settings/constants.js'
 import { getManagedFilePath } from 'src/utils/settings/managedPath.js'
 import type { AgentMemoryScope } from '../../tools/AgentTool/agentMemory.js'
@@ -12,6 +12,10 @@ import { getCwd } from '../../utils/cwd.js'
 import type { EffortValue } from '../../utils/effort.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getErrnoCode } from '../../utils/errors.js'
+import {
+  getPreferredManagedConfigSubdir,
+  getPreferredProjectConfigDir,
+} from '../../utils/forgePaths.js'
 import { AGENT_PATHS } from './types.js'
 
 /**
@@ -64,22 +68,22 @@ function getAgentDirectoryPath(location: SettingSource): string {
     case 'userSettings':
       return join(getClaudeConfigHomeDir(), AGENT_PATHS.AGENTS_DIR)
     case 'projectSettings':
-      return join(getCwd(), AGENT_PATHS.FOLDER_NAME, AGENT_PATHS.AGENTS_DIR)
+      return join(getPreferredProjectConfigDir(getCwd()), AGENT_PATHS.AGENTS_DIR)
     case 'policySettings':
-      return join(
+      return getPreferredManagedConfigSubdir(
         getManagedFilePath(),
-        AGENT_PATHS.FOLDER_NAME,
         AGENT_PATHS.AGENTS_DIR,
       )
     case 'localSettings':
-      return join(getCwd(), AGENT_PATHS.FOLDER_NAME, AGENT_PATHS.AGENTS_DIR)
+      return join(getPreferredProjectConfigDir(getCwd()), AGENT_PATHS.AGENTS_DIR)
   }
 }
 
 function getRelativeAgentDirectoryPath(location: SettingSource): string {
   switch (location) {
     case 'projectSettings':
-      return join('.', AGENT_PATHS.FOLDER_NAME, AGENT_PATHS.AGENTS_DIR)
+    case 'localSettings':
+      return join('.', relative(getCwd(), getAgentDirectoryPath(location)))
     default:
       return getAgentDirectoryPath(location)
   }
@@ -109,7 +113,7 @@ export function getActualAgentFilePath(agent: AgentDefinition): string {
     throw new Error('Cannot get file path for plugin agents')
   }
 
-  const dirPath = getAgentDirectoryPath(agent.source)
+  const dirPath = agent.baseDir || getAgentDirectoryPath(agent.source)
   const filename = agent.filename || agent.agentType
   return join(dirPath, `${filename}.md`)
 }
@@ -143,7 +147,11 @@ export function getActualRelativeAgentFilePath(agent: AgentDefinition): string {
     return 'CLI argument'
   }
 
-  const dirPath = getRelativeAgentDirectoryPath(agent.source)
+  const dirPath = agent.baseDir
+    ? agent.source === 'projectSettings' || agent.source === 'localSettings'
+      ? join('.', relative(getCwd(), agent.baseDir))
+      : agent.baseDir
+    : getRelativeAgentDirectoryPath(agent.source)
   const filename = agent.filename || agent.agentType
   return join(dirPath, `${filename}.md`)
 }

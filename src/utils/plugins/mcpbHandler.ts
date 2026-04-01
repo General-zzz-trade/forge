@@ -1,7 +1,7 @@
 import type {
   McpbManifest,
   McpbUserConfigurationOption,
-} from '@anthropic-ai/mcpb'
+} from './forgeMcpb.js'
 import axios from 'axios'
 import { createHash } from 'crypto'
 import { chmod, writeFile } from 'fs/promises'
@@ -21,6 +21,7 @@ import {
 import { jsonParse, jsonStringify } from '../slowOperations.js'
 import { getSystemDirectories } from '../systemDirectories.js'
 import { classifyFetchError, logPluginFetch } from './fetchTelemetry.js'
+import { getMcpConfigForManifest } from './forgeMcpb.js'
 /**
  * User configuration values for MCPB
  */
@@ -415,9 +416,6 @@ async function generateMcpConfig(
   extractedPath: string,
   userConfig: UserConfigValues = {},
 ): Promise<McpServerConfig> {
-  // Lazy import: @anthropic-ai/mcpb barrel pulls in zod v3 schemas (~700KB of
-  // bound closures). See dxt/helpers.ts for details.
-  const { getMcpConfigForManifest } = await import('@anthropic-ai/mcpb')
   const mcpConfig = await getMcpConfigForManifest({
     manifest,
     extensionPath: extractedPath,

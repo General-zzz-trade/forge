@@ -21,6 +21,14 @@ import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { ConfigParseError, getErrnoCode } from './errors.js'
 import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import { getFsImplementation } from './fsOperations.js'
+import {
+  getPreferredLocalInstructionPath,
+  getPreferredManagedInstructionPath,
+  getPreferredManagedInstructionRulesDir,
+  getPreferredProjectInstructionPath,
+  getPreferredUserInstructionPath,
+  getPreferredUserInstructionRulesDir,
+} from './forgePaths.js'
 import { findCanonicalGitRoot } from './git.js'
 import { safeParseJSON } from './json.js'
 import { stripBOM } from './jsonRead.js'
@@ -112,6 +120,9 @@ export type ProjectConfig = {
 
   hasCompletedProjectOnboarding?: boolean
   projectOnboardingSeenCount: number
+  hasInstructionExternalIncludesApproved?: boolean
+  hasInstructionExternalIncludesWarningShown?: boolean
+  // Legacy compatibility-only keys. Read as fallback, scrub on next write.
   hasClaudeMdExternalIncludesApproved?: boolean
   hasClaudeMdExternalIncludesWarningShown?: boolean
   // MCP server approval fields - migrated to settings but kept for backward compatibility
@@ -143,8 +154,89 @@ const DEFAULT_PROJECT_CONFIG: ProjectConfig = {
   disabledMcpjsonServers: [],
   hasTrustDialogAccepted: false,
   projectOnboardingSeenCount: 0,
-  hasClaudeMdExternalIncludesApproved: false,
-  hasClaudeMdExternalIncludesWarningShown: false,
+  hasInstructionExternalIncludesApproved: false,
+  hasInstructionExternalIncludesWarningShown: false,
+}
+
+function normalizeProjectConfig(projectConfig: ProjectConfig): ProjectConfig {
+  const needsLegacyApprovalMigration =
+    projectConfig.hasInstructionExternalIncludesApproved === undefined &&
+    projectConfig.hasClaudeMdExternalIncludesApproved !== undefined
+  const needsLegacyWarningMigration =
+    projectConfig.hasInstructionExternalIncludesWarningShown === undefined &&
+    projectConfig.hasClaudeMdExternalIncludesWarningShown !== undefined
+  const hasLegacyKeys =
+    'hasClaudeMdExternalIncludesApproved' in projectConfig ||
+    'hasClaudeMdExternalIncludesWarningShown' in projectConfig
+
+  if (
+    !needsLegacyApprovalMigration &&
+    !needsLegacyWarningMigration &&
+    !hasLegacyKeys
+  ) {
+    return projectConfig
+  }
+
+  const {
+    hasClaudeMdExternalIncludesApproved,
+    hasClaudeMdExternalIncludesWarningShown,
+    ...normalizedProjectConfig
+  } = projectConfig
+
+  return {
+    ...normalizedProjectConfig,
+    ...(needsLegacyApprovalMigration
+      ? {
+          hasInstructionExternalIncludesApproved:
+            hasClaudeMdExternalIncludesApproved,
+        }
+      : {}),
+    ...(needsLegacyWarningMigration
+      ? {
+          hasInstructionExternalIncludesWarningShown:
+            hasClaudeMdExternalIncludesWarningShown,
+        }
+      : {}),
+  }
+}
+
+export function hasInstructionExternalIncludesApproved(
+  projectConfig: Pick<
+    ProjectConfig,
+    | 'hasInstructionExternalIncludesApproved'
+    | 'hasClaudeMdExternalIncludesApproved'
+  >,
+): boolean {
+  return (
+    projectConfig.hasInstructionExternalIncludesApproved ??
+    projectConfig.hasClaudeMdExternalIncludesApproved ??
+    false
+  )
+}
+
+export function hasInstructionExternalIncludesWarningShown(
+  projectConfig: Pick<
+    ProjectConfig,
+    | 'hasInstructionExternalIncludesWarningShown'
+    | 'hasClaudeMdExternalIncludesWarningShown'
+  >,
+): boolean {
+  return (
+    projectConfig.hasInstructionExternalIncludesWarningShown ??
+    projectConfig.hasClaudeMdExternalIncludesWarningShown ??
+    false
+  )
+}
+
+export function withInstructionExternalIncludesState(
+  projectConfig: ProjectConfig,
+  approved: boolean,
+): ProjectConfig {
+  return {
+    ...normalizeProjectConfig(projectConfig),
+    hasInstructionExternalIncludesApproved: approved,
+    hasInstructionExternalIncludesWarningShown: true,
+  }
 }
 
 export type InstallMethod = 'local' | 'native' | 'global' | 'unknown'
@@ -227,6 +319,9 @@ export type GlobalConfig = {
   hasSeenUltraplanTerms?: boolean // ant-only: whether the one-time CCR terms notice has been shown in the ultraplan launch dialog
   hasResetAutoModeOptInForDefaultOffer?: boolean // ant-only: one-shot migration guard, re-prompts churned auto-mode users
   oauthAccount?: AccountInfo
+  authProvider?: import('../services/auth/types.js').IdentityProviderId
+  sessionIssuer?: import('../services/auth/types.js').SessionIssuer
+  preferredModelProvider?: import('../services/auth/types.js').SupportedModelProvider
   iterm2KeyBindingInstalled?: boolean // Legacy - keeping for backward compatibility
   editorMode?: EditorMode
   bypassPermissionsModeAccepted?: boolean
@@ -370,7 +465,7 @@ export type GlobalConfig = {
   showSpinnerTree?: boolean // Whether to show the teammate spinner tree instead of pills
 
   // First start time tracking
-  firstStartTime?: string // ISO timestamp when Claude Code was first started on this machine
+  firstStartTime?: string // ISO timestamp when Forge was first started on this machine
 
   messageIdleNotifThresholdMs: number // How long the user has to have been idle to get a notification that Claude is done generating
 
@@ -393,8 +488,8 @@ export type GlobalConfig = {
   inputNeededNotifEnabled?: boolean
   agentPushNotifEnabled?: boolean
 
-  // Claude Code usage tracking
-  claudeCodeFirstTokenDate?: string // ISO timestamp of the user's first Claude Code OAuth token
+  // Forge usage tracking
+  claudeCodeFirstTokenDate?: string // ISO timestamp of the user's first Forge OAuth token
 
   // Model switch callout tracking (ant-only)
   modelSwitchCalloutDismissed?: boolean // Whether user chose "Don't show again"
@@ -468,7 +563,7 @@ export type GlobalConfig = {
   // Key: "owner/repo" (lowercase), Value: array of absolute paths where repo is cloned
   githubRepoPaths?: Record<string, string[]>
 
-  // Terminal emulator to launch for claude-cli:// deep links. Captured from
+  // Terminal emulator to launch for Forge deep links. Captured from
   // TERM_PROGRAM during interactive sessions since the deep link handler runs
   // headless (LaunchServices/xdg) with no TERM_PROGRAM set.
   deepLinkTerminal?: string
@@ -507,7 +602,7 @@ export type GlobalConfig = {
   lspRecommendationNeverPlugins?: string[] // Plugin IDs to never suggest
   lspRecommendationIgnoredCount?: number // Track ignored recommendations (stops after 5)
 
-  // Claude Code hint protocol state (<claude-code-hint /> tags from CLIs/SDKs).
+  // Forge hint protocol state (<claude-code-hint /> tags from CLIs/SDKs).
   // Nested by hint type so future types (docs, mcp, ...) slot in without new
   // top-level keys.
   claudeCodeHints?: {
@@ -877,7 +972,7 @@ let configCacheHits = 0
 let configCacheMisses = 0
 // Session-total count of actual disk writes to the global config file.
 // Exposed for ant-only dev diagnostics (see inc-4552) so anomalous write
-// rates surface in the UI before they corrupt ~/.claude.json.
+// rates surface in the UI before they corrupt the global config file.
 let globalConfigWriteCount = 0
 
 export function getGlobalConfigWriteCount(): number {
@@ -976,12 +1071,16 @@ function removeProjectHistory(
   for (const [path, projectConfig] of Object.entries(projects)) {
     // history is removed from the type but may exist in old configs
     const legacy = projectConfig as ProjectConfig & { history?: unknown }
+    const normalizedProjectConfig = normalizeProjectConfig(projectConfig)
     if (legacy.history !== undefined) {
       needsCleaning = true
       const { history, ...cleanedConfig } = legacy
-      cleanedProjects[path] = cleanedConfig
+      cleanedProjects[path] = normalizeProjectConfig(cleanedConfig)
     } else {
-      cleanedProjects[path] = projectConfig
+      if (normalizedProjectConfig !== projectConfig) {
+        needsCleaning = true
+      }
+      cleanedProjects[path] = normalizedProjectConfig
     }
   }
 
@@ -1178,7 +1277,7 @@ function saveConfigWithLock<A extends object>(
     const lockTime = Date.now() - startTime
     if (lockTime > 100) {
       logForDebugging(
-        'Lock acquisition took longer than expected - another Claude instance may be running',
+        'Lock acquisition took longer than expected - another Forge instance may be running',
       )
       logEvent('tengu_config_lock_contention', {
         lock_time_ms: lockTime,
@@ -1216,7 +1315,7 @@ function saveConfigWithLock<A extends object>(
     const currentConfig = getConfig(file, createDefault)
     if (file === getGlobalClaudeFile() && wouldLoseAuthState(currentConfig)) {
       logForDebugging(
-        'saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping ~/.claude.json. See GH #3117.',
+        'saveConfigWithLock: re-read config is missing auth that cache has; refusing to write to avoid wiping the global config file. See GH #3117.',
         { level: 'error' },
       )
       logEvent('tengu_config_auth_loss_prevented', {})
@@ -1611,7 +1710,9 @@ export function getCurrentProjectConfig(): ProjectConfig {
     return DEFAULT_PROJECT_CONFIG
   }
 
-  const projectConfig = config.projects[absolutePath] ?? DEFAULT_PROJECT_CONFIG
+  const projectConfig = normalizeProjectConfig(
+    config.projects[absolutePath] ?? DEFAULT_PROJECT_CONFIG,
+  )
   // Not sure how this became a string
   // TODO: Fix upstream
   if (typeof projectConfig.allowedTools === 'string') {
@@ -1631,7 +1732,7 @@ export function saveCurrentProjectConfig(
     if (config === TEST_PROJECT_CONFIG_FOR_TESTING) {
       return
     }
-    Object.assign(TEST_PROJECT_CONFIG_FOR_TESTING, config)
+    Object.assign(TEST_PROJECT_CONFIG_FOR_TESTING, normalizeProjectConfig(config))
     return
   }
   const absolutePath = getProjectPathForConfig()
@@ -1643,8 +1744,12 @@ export function saveCurrentProjectConfig(
       createDefaultGlobalConfig,
       current => {
         const currentProjectConfig =
-          current.projects?.[absolutePath] ?? DEFAULT_PROJECT_CONFIG
-        const newProjectConfig = updater(currentProjectConfig)
+          normalizeProjectConfig(
+            current.projects?.[absolutePath] ?? DEFAULT_PROJECT_CONFIG,
+          )
+        const newProjectConfig = normalizeProjectConfig(
+          updater(currentProjectConfig),
+        )
         // Skip if no changes (same reference returned)
         if (newProjectConfig === currentProjectConfig) {
           return current
@@ -1679,8 +1784,12 @@ export function saveCurrentProjectConfig(
       return
     }
     const currentProjectConfig =
-      config.projects?.[absolutePath] ?? DEFAULT_PROJECT_CONFIG
-    const newProjectConfig = updater(currentProjectConfig)
+      normalizeProjectConfig(
+        config.projects?.[absolutePath] ?? DEFAULT_PROJECT_CONFIG,
+      )
+    const newProjectConfig = normalizeProjectConfig(
+      updater(currentProjectConfig),
+    )
     // Skip if no changes (same reference returned)
     if (newProjectConfig === currentProjectConfig) {
       return
@@ -1781,13 +1890,13 @@ export function getMemoryPath(memoryType: MemoryType): string {
 
   switch (memoryType) {
     case 'User':
-      return join(getClaudeConfigHomeDir(), 'CLAUDE.md')
+      return getPreferredUserInstructionPath()
     case 'Local':
-      return join(cwd, 'CLAUDE.local.md')
+      return getPreferredLocalInstructionPath(cwd)
     case 'Project':
-      return join(cwd, 'CLAUDE.md')
+      return getPreferredProjectInstructionPath(cwd)
     case 'Managed':
-      return join(getManagedFilePath(), 'CLAUDE.md')
+      return getPreferredManagedInstructionPath(getManagedFilePath())
     case 'AutoMem':
       return getAutoMemEntrypoint()
   }
@@ -1798,12 +1907,20 @@ export function getMemoryPath(memoryType: MemoryType): string {
   return '' // unreachable in external builds where TeamMem is not in MemoryType
 }
 
+export function getManagedInstructionRulesDir(): string {
+  return getPreferredManagedInstructionRulesDir(getManagedFilePath())
+}
+
+export function getUserInstructionRulesDir(): string {
+  return getPreferredUserInstructionRulesDir()
+}
+
 export function getManagedClaudeRulesDir(): string {
-  return join(getManagedFilePath(), '.claude', 'rules')
+  return getManagedInstructionRulesDir()
 }
 
 export function getUserClaudeRulesDir(): string {
-  return join(getClaudeConfigHomeDir(), 'rules')
+  return getUserInstructionRulesDir()
 }
 
 // Exported for testing only

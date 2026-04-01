@@ -24,6 +24,7 @@ import {
   getBridgeBaseUrlOverride,
 } from '../../bridge/bridgeConfig.js'
 import { getOauthConfig } from '../../constants/oauth.js'
+import { getAuthenticatedApiBaseUrl } from '../../services/auth/runtime.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
@@ -70,6 +71,7 @@ function getBridgeBaseUrl(): string {
   return (
     getBridgeBaseUrlOverride() ??
     process.env.ANTHROPIC_BASE_URL ??
+    getAuthenticatedApiBaseUrl() ??
     getOauthConfig().BASE_API_URL
   )
 }

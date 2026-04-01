@@ -1,7 +1,7 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { Box, Text } from '../ink.js';
 import * as React from 'react';
-import { getLargeMemoryFiles, MAX_MEMORY_CHARACTER_COUNT, type MemoryFileInfo } from './claudemd.js';
+import { getLargeMemoryFiles, MAX_MEMORY_CHARACTER_COUNT, type MemoryFileInfo } from './instructions.js';
 import figures from 'figures';
 import { getCwd } from './cwd.js';
 import { relative } from 'path';
@@ -26,6 +26,17 @@ export type StatusNoticeDefinition = {
   isActive: (context: StatusNoticeContext) => boolean;
   render: (context: StatusNoticeContext) => React.ReactNode;
 };
+
+function getAuthTokenSourceLabel(source: ReturnType<typeof getAuthTokenSource>['source']): string {
+  return source === 'forge' ? 'Forge session' : source === 'openai' ? 'OpenAI session' : source === 'claude.ai' ? 'claude.ai' : source;
+}
+
+function getAuthTokenRemovalHint(source: ReturnType<typeof getAuthTokenSource>['source']): string {
+  if (source === 'forge' || source === 'openai' || source === 'claude.ai') {
+    return 'forge /logout to sign out.'
+  }
+  return `Unset the ${source} environment variable.`
+}
 
 // Individual notice definitions
 const largeMemoryFilesNotice: StatusNoticeDefinition = {
@@ -62,9 +73,9 @@ const claudeAiSubscriberExternalTokenNotice: StatusNoticeDefinition = {
     return <Box flexDirection="row" marginTop={1}>
         <Text color="warning">{figures.warning}</Text>
         <Text color="warning">
-          Auth conflict: Using {authTokenInfo.source} instead of Claude account
+          Auth conflict: Using {authTokenInfo.source} instead of Forge account
           subscription token. Either unset {authTokenInfo.source}, or run
-          `claude /logout`.
+          `forge /logout`.
         </Text>
       </Box>;
   }
@@ -90,7 +101,7 @@ const apiKeyConflictNotice: StatusNoticeDefinition = {
         <Text color="warning">{figures.warning}</Text>
         <Text color="warning">
           Auth conflict: Using {apiKeySource} instead of Anthropic Console key.
-          Either unset {apiKeySource}, or run `claude /logout`.
+          Either unset {apiKeySource}, or run `forge /logout`.
         </Text>
       </Box>;
   }
@@ -118,20 +129,20 @@ const bothAuthMethodsNotice: StatusNoticeDefinition = {
         <Box flexDirection="row">
           <Text color="warning">{figures.warning}</Text>
           <Text color="warning">
-            Auth conflict: Both a token ({authTokenInfo.source}) and an API key
+            Auth conflict: Both a token ({getAuthTokenSourceLabel(authTokenInfo.source)}) and an API key
             ({apiKeySource}) are set. This may lead to unexpected behavior.
           </Text>
         </Box>
         <Box flexDirection="column" marginLeft={3}>
           <Text color="warning">
             · Trying to use{' '}
-            {authTokenInfo.source === 'claude.ai' ? 'claude.ai' : authTokenInfo.source}
+            {getAuthTokenSourceLabel(authTokenInfo.source)}
             ?{' '}
-            {apiKeySource === 'ANTHROPIC_API_KEY' ? 'Unset the ANTHROPIC_API_KEY environment variable, or claude /logout then say "No" to the API key approval before login.' : apiKeySource === 'apiKeyHelper' ? 'Unset the apiKeyHelper setting.' : 'claude /logout'}
+            {apiKeySource === 'ANTHROPIC_API_KEY' ? 'Unset the ANTHROPIC_API_KEY environment variable, or forge /logout then say "No" to the API key approval before login.' : apiKeySource === 'apiKeyHelper' ? 'Unset the apiKeyHelper setting.' : 'forge /logout'}
           </Text>
           <Text color="warning">
             · Trying to use {apiKeySource}?{' '}
-            {authTokenInfo.source === 'claude.ai' ? 'claude /logout to sign out of claude.ai.' : `Unset the ${authTokenInfo.source} environment variable.`}
+            {getAuthTokenRemovalHint(authTokenInfo.source)}
           </Text>
         </Box>
       </Box>;

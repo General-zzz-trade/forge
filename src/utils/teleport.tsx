@@ -14,11 +14,10 @@ import type { Root } from '../ink.js';
 import { KeybindingSetup } from '../keybindings/KeybindingProviderSetup.js';
 import { queryHaiku } from '../services/api/claude.js';
 import { getSessionLogsViaOAuth, getTeleportEvents } from '../services/api/sessionIngress.js';
-import { getOrganizationUUID } from '../services/oauth/client.js';
 import { AppStateProvider } from '../state/AppState.js';
 import type { Message, SystemMessage } from '../types/message.js';
 import type { PermissionMode } from '../types/permissions.js';
-import { checkAndRefreshOAuthTokenIfNeeded, getClaudeAIOAuthTokens } from './auth.js';
+import { checkAndRefreshOAuthTokenIfNeeded } from './auth.js';
 import { checkGithubAppInstalled } from './background/remote/preconditions.js';
 import { deserializeMessages, type TeleportRemoteResponse } from './conversationRecovery.js';
 import { getCwd } from './cwd.js';
@@ -37,7 +36,7 @@ import { isTranscriptMessage } from './sessionStorage.js';
 import { getSettings_DEPRECATED } from './settings/settings.js';
 import { jsonStringify } from './slowOperations.js';
 import { asSystemPrompt } from './systemPromptType.js';
-import { fetchSession, type GitRepositoryOutcome, type GitSource, getBranchFromSession, getOAuthHeaders, type SessionResource } from './teleport/api.js';
+import { fetchSession, type GitRepositoryOutcome, type GitSource, getBranchFromSession, getOAuthHeaders, prepareApiRequest, type SessionResource } from './teleport/api.js';
 import { fetchEnvironments } from './teleport/environments.js';
 import { createAndUploadGitBundle } from './teleport/gitBundle.js';
 export type TeleportResult = {
@@ -433,21 +432,18 @@ export async function teleportResumeCodeSession(sessionId: string, onProgress?: 
   }
   logForDebugging(`Resuming code session ID: ${sessionId}`);
   try {
-    const accessToken = getClaudeAIOAuthTokens()?.accessToken;
-    if (!accessToken) {
+    let accessToken: string;
+    let orgUUID: string;
+    try {
+      ({
+        accessToken,
+        orgUUID
+      } = await prepareApiRequest());
+    } catch (error) {
       logEvent('tengu_teleport_resume_error', {
         error_type: 'no_access_token' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
-      throw new Error('Claude Code web sessions require authentication with a Claude.ai account. API key authentication is not sufficient. Please run /login to authenticate, or check your authentication status with /status.');
-    }
-
-    // Get organization UUID
-    const orgUUID = await getOrganizationUUID();
-    if (!orgUUID) {
-      logEvent('tengu_teleport_resume_error', {
-        error_type: 'no_org_uuid' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-      });
-      throw new Error('Unable to get organization UUID for constructing session URL');
+      throw error;
     }
 
     // Fetch and validate repository matches before resuming
@@ -466,7 +462,7 @@ export async function teleportResumeCodeSession(sessionId: string, onProgress?: 
           });
           // Include host for GHE users so they know which instance the repo is on
           const notInRepoDisplay = repoValidation.sessionHost && repoValidation.sessionHost.toLowerCase() !== 'github.com' ? `${repoValidation.sessionHost}/${repoValidation.sessionRepo}` : repoValidation.sessionRepo;
-          throw new TeleportOperationError(`You must run claude --teleport ${sessionId} from a checkout of ${notInRepoDisplay}.`, chalk.red(`You must run claude --teleport ${sessionId} from a checkout of ${chalk.bold(notInRepoDisplay)}.\n`));
+          throw new TeleportOperationError(`You must run forge --teleport ${sessionId} from a checkout of ${notInRepoDisplay}.`, chalk.red(`You must run forge --teleport ${sessionId} from a checkout of ${chalk.bold(notInRepoDisplay)}.\n`));
         }
       case 'mismatch':
         {
@@ -478,7 +474,7 @@ export async function teleportResumeCodeSession(sessionId: string, onProgress?: 
           const hostsDiffer = repoValidation.sessionHost && repoValidation.currentHost && repoValidation.sessionHost.replace(/:\d+$/, '').toLowerCase() !== repoValidation.currentHost.replace(/:\d+$/, '').toLowerCase();
           const sessionDisplay = hostsDiffer ? `${repoValidation.sessionHost}/${repoValidation.sessionRepo}` : repoValidation.sessionRepo;
           const currentDisplay = hostsDiffer ? `${repoValidation.currentHost}/${repoValidation.currentRepo}` : repoValidation.currentRepo;
-          throw new TeleportOperationError(`You must run claude --teleport ${sessionId} from a checkout of ${sessionDisplay}.\nThis repo is ${currentDisplay}.`, chalk.red(`You must run claude --teleport ${sessionId} from a checkout of ${chalk.bold(sessionDisplay)}.\nThis repo is ${chalk.bold(currentDisplay)}.\n`));
+          throw new TeleportOperationError(`You must run forge --teleport ${sessionId} from a checkout of ${sessionDisplay}.\nThis repo is ${currentDisplay}.`, chalk.red(`You must run forge --teleport ${sessionId} from a checkout of ${chalk.bold(sessionDisplay)}.\nThis repo is ${chalk.bold(currentDisplay)}.\n`));
         }
       case 'error':
         throw new TeleportOperationError(repoValidation.errorMessage || 'Failed to validate session repository', chalk.red(`Error: ${repoValidation.errorMessage || 'Failed to validate session repository'}\n`));
@@ -608,7 +604,7 @@ export async function teleportFromSessionsAPI(sessionId: string, orgUUID: string
       logEvent('tengu_teleport_error_session_not_found_404', {
         sessionId: sessionId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
       });
-      throw new TeleportOperationError(`${sessionId} not found.`, `${sessionId} not found.\n${chalk.dim('Run /status in Claude Code to check your account.')}`);
+      throw new TeleportOperationError(`${sessionId} not found.`, `${sessionId} not found.\n${chalk.dim('Run /status in Forge to check your account.')}`);
     }
     logError(err);
     throw new Error(`Failed to fetch session from Sessions API: ${err.message}`);
@@ -633,20 +629,17 @@ export type PollRemoteSessionResponse = {
 export async function pollRemoteSessionEvents(sessionId: string, afterId: string | null = null, opts?: {
   skipMetadata?: boolean;
 }): Promise<PollRemoteSessionResponse> {
-  const accessToken = getClaudeAIOAuthTokens()?.accessToken;
-  if (!accessToken) {
-    throw new Error('No access token for polling');
-  }
-  const orgUUID = await getOrganizationUUID();
-  if (!orgUUID) {
-    throw new Error('No org UUID for polling');
-  }
+  const {
+    accessToken,
+    orgUUID,
+    baseUrl
+  } = await prepareApiRequest();
   const headers = {
     ...getOAuthHeaders(accessToken),
     'anthropic-beta': 'ccr-byoc-2025-07-29',
     'x-organization-uuid': orgUUID
   };
-  const eventsUrl = `${getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}/events`;
+  const eventsUrl = `${baseUrl}/v1/sessions/${sessionId}/events`;
   type EventsResponse = {
     data: unknown[];
     has_more: boolean;
@@ -800,16 +793,15 @@ export async function teleportToRemote(options: {
   try {
     // Check authentication
     await checkAndRefreshOAuthTokenIfNeeded();
-    const accessToken = getClaudeAIOAuthTokens()?.accessToken;
-    if (!accessToken) {
-      logError(new Error('No access token found for remote session creation'));
-      return null;
-    }
-
-    // Get organization UUID
-    const orgUUID = await getOrganizationUUID();
-    if (!orgUUID) {
-      logError(new Error('Unable to get organization UUID for remote session creation'));
+    let accessToken: string, orgUUID: string, baseUrl: string;
+    try {
+      ({
+        accessToken,
+        orgUUID,
+        baseUrl
+      } = await prepareApiRequest());
+    } catch (error) {
+      logError(error instanceof Error ? error : new Error(String(error)));
       return null;
     }
 
@@ -819,7 +811,7 @@ export async function teleportToRemote(options: {
     // (bughunter.go:520 sets a git source too; env-manager does the checkout
     // before the SessionStart hook fires).
     if (options.environmentId) {
-      const url = `${getOauthConfig().BASE_API_URL}/v1/sessions`;
+      const url = `${baseUrl}/v1/sessions`;
       const headers = {
         ...getOAuthHeaders(accessToken),
         'anthropic-beta': 'ccr-byoc-2025-07-29',
@@ -839,7 +831,7 @@ export async function teleportToRemote(options: {
         const bundle = await createAndUploadGitBundle({
           oauthToken: accessToken,
           sessionId: getSessionId(),
-          baseUrl: getOauthConfig().BASE_API_URL
+          baseUrl
         }, {
           signal
         });
@@ -1003,7 +995,7 @@ export async function teleportToRemote(options: {
       const bundle = await createAndUploadGitBundle({
         oauthToken: accessToken,
         sessionId: getSessionId(),
-        baseUrl: getOauthConfig().BASE_API_URL
+        baseUrl
       }, {
         signal
       });
@@ -1093,7 +1085,7 @@ export async function teleportToRemote(options: {
     logForDebugging(`Selected environment: ${environmentId} (${selectedEnvironment.name}, ${selectedEnvironment.kind})`);
 
     // Prepare API request for Sessions API
-    const url = `${getOauthConfig().BASE_API_URL}/v1/sessions`;
+    const url = `${baseUrl}/v1/sessions`;
     const headers = {
       ...getOAuthHeaders(accessToken),
       'anthropic-beta': 'ccr-byoc-2025-07-29',
@@ -1198,16 +1190,22 @@ export async function teleportToRemote(options: {
  * reaper collects it.
  */
 export async function archiveRemoteSession(sessionId: string): Promise<void> {
-  const accessToken = getClaudeAIOAuthTokens()?.accessToken;
-  if (!accessToken) return;
-  const orgUUID = await getOrganizationUUID();
-  if (!orgUUID) return;
+  let accessToken: string, orgUUID: string, baseUrl: string;
+  try {
+    ({
+      accessToken,
+      orgUUID,
+      baseUrl
+    } = await prepareApiRequest());
+  } catch {
+    return;
+  }
   const headers = {
     ...getOAuthHeaders(accessToken),
     'anthropic-beta': 'ccr-byoc-2025-07-29',
     'x-organization-uuid': orgUUID
   };
-  const url = `${getOauthConfig().BASE_API_URL}/v1/sessions/${sessionId}/archive`;
+  const url = `${baseUrl}/v1/sessions/${sessionId}/archive`;
   try {
     const resp = await axios.post(url, {}, {
       headers,

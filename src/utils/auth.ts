@@ -4,7 +4,7 @@ import { execa } from 'execa'
 import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { join } from 'path'
-import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
+import { FIRST_PARTY_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -19,6 +19,7 @@ import {
   getMockSubscriptionType,
   shouldUseMockSubscription,
 } from '../services/mockRateLimits.js'
+import { getActiveForgeSession } from '../services/auth/runtime.js'
 import {
   isOAuthTokenExpired,
   refreshOAuthToken,
@@ -186,6 +187,17 @@ export function getAuthTokenSource() {
     }
     return {
       source: 'CCR_OAUTH_TOKEN_FILE' as const,
+      hasToken: true,
+    }
+  }
+
+  const forgeSession = getActiveForgeSession()
+  if (forgeSession?.accessToken) {
+    return {
+      source:
+        forgeSession.issuer === 'openai'
+          ? ('openai' as const)
+          : ('forge' as const),
       hasToken: true,
     }
   }
@@ -687,7 +699,7 @@ export function refreshAwsAuth(awsAuthRefresh: string): Promise<boolean> {
               'AWS auth refresh timed out after 3 minutes. Run your auth command manually in a separate terminal.',
             )
           : chalk.red(
-              'Error running awsAuthRefresh (in settings or ~/.claude.json):',
+              'Error running awsAuthRefresh (in settings or the global config file):',
             )
         // biome-ignore lint/suspicious/noConsole:: intentional console output
         console.error(message)
@@ -765,7 +777,7 @@ async function getAwsCredsFromCredentialExport(): Promise<{
       }
     } catch (e) {
       const message = chalk.red(
-        'Error getting AWS credentials from awsCredentialExport (in settings or ~/.claude.json):',
+        'Error getting AWS credentials from awsCredentialExport (in settings or the global config file):',
       )
       if (e instanceof Error) {
         // biome-ignore lint/suspicious/noConsole:: intentional console output
@@ -955,7 +967,7 @@ export function refreshGcpAuth(gcpAuthRefresh: string): Promise<boolean> {
               'GCP auth refresh timed out after 3 minutes. Run your auth command manually in a separate terminal.',
             )
           : chalk.red(
-              'Error running gcpAuthRefresh (in settings or ~/.claude.json):',
+              'Error running gcpAuthRefresh (in settings or the global config file):',
             )
         // biome-ignore lint/suspicious/noConsole:: intentional console output
         console.error(message)
@@ -1421,6 +1433,9 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
   }
 }
 
+export const getFirstPartyOAuthTokens = getClaudeAIOAuthTokens
+export const getFirstPartyOAuthTokensAsync = getClaudeAIOAuthTokensAsync
+
 // In-flight promise for deduplicating concurrent calls
 let pendingRefreshCheck: Promise<boolean> | null = null
 
@@ -1579,7 +1594,8 @@ export function isClaudeAISubscriber(): boolean {
  */
 export function hasProfileScope(): boolean {
   return (
-    getClaudeAIOAuthTokens()?.scopes?.includes(CLAUDE_AI_PROFILE_SCOPE) ?? false
+    getClaudeAIOAuthTokens()?.scopes?.includes(FIRST_PARTY_PROFILE_SCOPE) ??
+    false
   )
 }
 
@@ -1964,8 +1980,8 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
         `Unable to verify organization for the current authentication token.\n` +
         `This machine requires organization ${requiredOrgUuid} but the profile could not be fetched.\n` +
         `This may be a network error, or the token may lack the user:profile scope required for\n` +
-        `verification (tokens from 'claude setup-token' do not include this scope).\n` +
-        `Try again, or obtain a full-scope token via 'claude auth login'.`,
+        `verification (tokens from 'forge setup-token' do not include this scope).\n` +
+        `Try again, or obtain a full-scope token via 'forge auth login'.`,
     }
   }
 
@@ -1995,7 +2011,7 @@ export async function validateForceLoginOrg(): Promise<OrgValidationResult> {
     message:
       `Your authentication token belongs to organization ${tokenOrgUuid},\n` +
       `but this machine requires organization ${requiredOrgUuid}.\n\n` +
-      `Please log in with the correct organization: claude auth login`,
+      `Please log in with the correct organization: forge auth login`,
   }
 }
 

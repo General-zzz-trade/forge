@@ -524,7 +524,7 @@ export const FileEditTool = buildTool({
       limit: undefined,
     })
 
-    // 7. Log events
+    // 7. Log events for compatibility analytics
     if (absoluteFilePath.endsWith(`${sep}CLAUDE.md`)) {
       logEvent('tengu_write_claudemd', {})
     }

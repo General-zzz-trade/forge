@@ -23,7 +23,10 @@ export function getAPIProviderForStatsig(): AnalyticsMetadata_I_VERIFIED_THIS_IS
  * (or api-staging.anthropic.com for ant users).
  */
 export function isFirstPartyAnthropicBaseUrl(): boolean {
-  const baseUrl = process.env.ANTHROPIC_BASE_URL
+  const baseUrl =
+    process.env.FORGE_API_BASE_URL ||
+    process.env.ANTHROPIC_BASE_URL ||
+    process.env.CLAUDE_CODE_API_BASE_URL
   if (!baseUrl) {
     return true
   }
