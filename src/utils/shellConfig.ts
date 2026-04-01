@@ -3,14 +3,16 @@
  * Used for managing CLI aliases and PATH entries
  */
 
-import { open, readFile, stat } from 'fs/promises'
+import { mkdir, open, readFile, stat } from 'fs/promises'
+import { delimiter, dirname, join, resolve } from 'path'
 import { homedir as osHomedir } from 'os'
-import { join } from 'path'
 import { isFsInaccessible } from './errors.js'
 import { getLocalClaudePath, getLocalForgePath } from './localInstaller.js'
 
 const INSTALLER_ALIAS_NAMES = new Set(['forge', 'claude'])
 export const CLI_ALIAS_REGEX = /^\s*alias\s+(?:forge|claude)\s*=/
+export const MANAGED_PATH_BLOCK_START = '# >>> forge managed path >>>'
+export const MANAGED_PATH_BLOCK_END = '# <<< forge managed path <<<'
 
 type EnvLike = Record<string, string | undefined>
 
@@ -35,6 +37,79 @@ export function getShellConfigPaths(
     bash: join(home, '.bashrc'),
     fish: join(home, '.config/fish/config.fish'),
   }
+}
+
+export function isDirectoryInPath(
+  directory: string,
+  pathValue: string | undefined = process.env.PATH,
+): boolean {
+  const resolvedDirectory = resolve(directory)
+
+  return (pathValue || '').split(delimiter).some(entry => {
+    try {
+      return resolve(entry) === resolvedDirectory
+    } catch {
+      return false
+    }
+  })
+}
+
+function getShellPathBlock(shell: string, directory: string): string {
+  const displayDir = directory.replace(osHomedir(), '~')
+  if (shell === 'fish') {
+    return [
+      MANAGED_PATH_BLOCK_START,
+      `fish_add_path -m ${displayDir}`,
+      MANAGED_PATH_BLOCK_END,
+    ].join('\n')
+  }
+
+  return [
+    MANAGED_PATH_BLOCK_START,
+    `export PATH="${displayDir}:$PATH"`,
+    MANAGED_PATH_BLOCK_END,
+  ].join('\n')
+}
+
+export async function ensureDirectoryInShellPath(
+  shell: string,
+  directory: string,
+  options?: ShellConfigOptions,
+): Promise<{ updated: boolean; configPath: string | null }> {
+  const configs = getShellConfigPaths(options)
+  const configPath = configs[shell]
+  if (!configPath) {
+    return { updated: false, configPath: null }
+  }
+
+  let content = ''
+  try {
+    content = await readFile(configPath, { encoding: 'utf8' })
+  } catch (e: unknown) {
+    if (!isFsInaccessible(e)) throw e
+  }
+
+  const displayDir = directory.replace(osHomedir(), '~')
+  if (
+    isDirectoryInPath(directory, options?.env?.PATH) ||
+    content.includes(MANAGED_PATH_BLOCK_START) ||
+    content.includes(displayDir) ||
+    content.includes(directory)
+  ) {
+    return { updated: false, configPath }
+  }
+
+  await mkdir(dirname(configPath), { recursive: true })
+  const nextContent = `${content.trimEnd()}\n\n${getShellPathBlock(shell, directory)}\n`
+  const fh = await open(configPath, 'w')
+  try {
+    await fh.writeFile(nextContent, { encoding: 'utf8' })
+    await fh.datasync()
+  } finally {
+    await fh.close()
+  }
+
+  return { updated: true, configPath }
 }
 
 /**

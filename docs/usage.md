@@ -1,16 +1,16 @@
-# Forge Usage Guide
+# Forge 使用说明
 
-This guide describes how to use the repository in its current real state.
+本文档说明当前仓库的实际可用用法，重点覆盖安装、启动、登录、非交互调用和排障路径。
 
-## Start Forge
+## 启动方式
 
-### Install from npm
+### 通过 npm 全局安装
 
 ```bash
 npm install -g forge-coder
 ```
 
-Then use:
+安装完成后可直接使用：
 
 ```bash
 forge --version
@@ -18,17 +18,38 @@ forge --help
 forge auth status
 ```
 
-The npm package installs the `forge` launcher and bundles Bun through the
-official `bun` npm package. You should not need a separate Bun install. If you
-want to force a different runtime, set `BUN_BIN=/path/to/bun`.
+包安装过程会同时准备 Bun 运行时，通常不需要额外手动安装。如果要强制指定 Bun 路径，可设置：
 
-Preferred launcher:
+```bash
+export BUN_BIN=/path/to/bun
+```
+
+### 通过源码目录启动
+
+```bash
+npm install
+forge --version
+forge
+```
+
+如果当前 shell 还没有刷新 PATH，可先使用：
+
+```bash
+npx forge --version
+npx forge
+```
+
+`npm install` 会自动触发 `npm run setup:path`，尝试在 `~/.local/bin` 中创建 `forge` 启动器，并在需要时修复 shell 的 PATH 配置。
+
+### 通过开发脚本启动
+
+最稳定的开发态入口：
 
 ```bash
 bash scripts/run-forge-cli.sh
 ```
 
-Useful checks:
+对应检查命令：
 
 ```bash
 bash scripts/run-forge-cli.sh --version
@@ -36,160 +57,175 @@ bash scripts/run-forge-cli.sh --help
 bash scripts/run-forge-cli.sh auth status
 ```
 
-Package-script equivalents:
+仓库脚本等价入口：
 
 ```bash
-bun run cli
-bun run version
+npm start
+npm run version
 ```
 
-## Authentication
+## 登录方式
 
-### Preferred: import official Codex CLI login
+### 推荐方式：导入 Codex CLI 登录
 
-1. Log into Codex:
+1. 先完成 Codex CLI 登录：
 
 ```bash
 codex login
 codex login status
 ```
 
-2. Import that login into Forge:
+2. 导入到 Forge：
 
 ```bash
 bash scripts/run-forge-cli.sh auth login --openai
 ```
 
-3. Verify:
+3. 确认登录状态：
 
 ```bash
 bash scripts/run-forge-cli.sh auth status
 ```
 
-Expected state:
+预期关键信息：
 
 - `loggedIn: true`
 - `authMethod: "openai_session"`
 - `authProvider: "openai"`
 
-### Existing first-party login
+### 兼容读取已有本地登录状态
 
-If your local config already contains the older first-party login state, Forge
-still reads it through compatibility paths.
+如果本地配置目录中已经存在旧格式登录信息，Forge 仍会通过兼容层读取。这适合历史环境迁移，不建议新环境优先依赖。
 
-## REPL
+## 交互式 REPL
 
-Start an interactive session:
+启动交互会话：
 
 ```bash
 bash scripts/run-forge-cli.sh
 ```
 
-You can also pass an initial prompt:
+也可以直接附带首条提示词：
 
 ```bash
-bash scripts/run-forge-cli.sh "Summarize this repository."
+bash scripts/run-forge-cli.sh "请总结这个仓库的主要结构。"
 ```
 
-## Non-interactive mode
+## 非交互模式
 
-Basic `--print` request:
+最小 `--print` 请求：
 
 ```bash
 bash scripts/run-forge-cli.sh --print "Reply with the single word OK." --disable-slash-commands --tools "" --max-turns 1
 ```
 
-Current practical use:
+当前适合的场景：
 
-- quick scripted prompts
-- smoke tests
-- simple no-tool text requests
+- shell 脚本调用
+- 冒烟测试
+- 简单文本问答
 
-## OpenAI / Codex behavior today
+## 当前 OpenAI 运行行为
 
-Forge now supports OpenAI login through Codex CLI, but there are two runtime
-cases:
+当前登录链路分成两类情况：
 
-1. Codex provides a usable OpenAI credential for Responses API.
-   Forge can use the native OpenAI path directly.
+1. Codex CLI 提供了可直接使用的 OpenAI 凭据。
+   Forge 会优先走原生 OpenAI 路径。
 
-2. Codex only exposes a ChatGPT OAuth token without `api.responses.write`.
-   Forge still logs in successfully and falls back to `codex exec` for simple
-   no-tool text requests.
+2. 本地只有受限的 OAuth 会话凭据。
+   Forge 仍能成功登录，但部分简单文本请求会走 `codex exec` 兼容路径。
 
-This means:
+这意味着：
 
-- login import works
-- minimal text requests work
-- full OpenAI feature parity is not finished yet
+- 登录导入是可用的
+- 最小文本请求是可用的
+- 更完整的原生 OpenAI 工具能力仍在补齐
 
-## Common commands
+## 常用命令
+
+```bash
+forge --help
+forge auth status
+forge auth login --openai
+forge doctor
+forge update
+```
+
+如果你在源码目录中调试，也可以继续使用：
 
 ```bash
 bash scripts/run-forge-cli.sh --help
 bash scripts/run-forge-cli.sh auth status
-bash scripts/run-forge-cli.sh auth login --openai
-bash scripts/run-forge-cli.sh doctor
-bash scripts/run-forge-cli.sh update
 ```
 
-Inside the interactive CLI, the command set is broader, including auth,
-plugins, MCP, doctor, status, memory, and model-related commands.
+交互界面中的命令范围更广，包含认证、插件、MCP、诊断、状态、内存和模型相关命令。
 
-## Useful project scripts
+## 常用项目脚本
 
 ```bash
-bun run generate
-node scripts/recovery-audit.mjs
-node scripts/openai-oauth-preflight.mjs
+npm run generate
+npm run recovery:audit
+npm run preflight:openai
 node scripts/mock-forge-gateway.mjs
 ```
 
-What they do:
+作用说明：
 
-- `generate`: regenerates derived SDK/settings files
-- `recovery-audit`: checks recovery regressions
-- `openai-oauth-preflight`: checks Codex/OpenAI login readiness
-- `mock-forge-gateway`: optional legacy bridge test server
+- `generate`：重新生成派生的 SDK 类型和设置结构
+- `recovery:audit`：检查关键恢复链路是否回退
+- `preflight:openai`：检查本机 OpenAI/Codex 登录准备情况
+- `mock-forge-gateway.mjs`：用于兼容桥接链路的本地测试
 
-## Troubleshooting
+## 故障排查
 
-### `auth login --openai` works, but requests fail
+### `auth login --openai` 成功，但请求失败
 
-Run:
+执行：
 
 ```bash
 node scripts/openai-oauth-preflight.mjs
 ```
 
-If it reports an `oauth_access_token` without Responses access, Forge can still
-import the login, but only the simple fallback path is available.
+如果输出表明本地只有受限的 OAuth 会话，而没有完整的 Responses 能力，那么 Forge 仍可导入登录，但只能覆盖较简单的兼容请求路径。
 
-### `auth status` looks wrong after testing
+### `auth status` 看起来不对
 
-Use an isolated config dir:
+使用独立配置目录重新验证：
 
 ```bash
 FORGE_CONFIG_DIR="$(mktemp -d /tmp/forge-auth-test.XXXXXX)" \
   bash scripts/run-forge-cli.sh auth login --openai
 ```
 
-Then reuse the same `FORGE_CONFIG_DIR` for later commands.
+后续的 `auth status` 和 `--print` 也继续复用同一个 `FORGE_CONFIG_DIR`。
 
-### CLI starts but behavior seems inconsistent
+### 执行 `forge` 时提示命令不存在
 
-Re-run the core checks:
+先执行：
 
 ```bash
-bun run generate
-node scripts/recovery-audit.mjs
+npm run setup:path
+```
+
+如果脚本已经写入 PATH 配置，重新打开一个终端再试：
+
+```bash
+forge --version
+```
+
+### CLI 能启动，但行为异常
+
+重新跑一遍核心检查：
+
+```bash
+npm run generate
+npm run recovery:audit
 bash scripts/run-forge-cli.sh --help
 bash scripts/run-forge-cli.sh auth status
 ```
 
-## Current limitations
+## 当前限制
 
-- OpenAI tool-calling coverage is not complete
-- not every historical Anthropic-first subsystem is fully adapted
-- some advanced paths still rely on compatibility behavior rather than a fully
-  clean Forge-native implementation
+- 原生 OpenAI 工具调用覆盖仍不完整
+- 一些高级能力仍依赖兼容层，不是完全收敛后的最终实现
+- 不同安装方式下的自动更新体验还没有完全统一

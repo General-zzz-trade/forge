@@ -18,6 +18,7 @@ import {
   getLocalForgePath,
   getLocalInstallDir,
   getShellType,
+  getUserLocalBinDir,
   isRunningFromLocalInstallation,
   localInstallationExists,
 } from './localInstaller.js'
@@ -42,6 +43,7 @@ import {
   findClaudeAlias,
   findValidClaudeAlias,
   getShellConfigPaths,
+  isDirectoryInPath,
 } from './shellConfig.js'
 import { jsonParse } from './slowOperations.js'
 import { which } from './which.js'
@@ -481,26 +483,47 @@ async function detectConfigurationIssues(
   const existingAlias = await findClaudeAlias()
   const validAlias = await findValidClaudeAlias()
   const localForgePathForDisplay = getLocalForgePath().replace(homedir(), '~')
+  const localBinDirForDisplay = getUserLocalBinDir().replace(homedir(), '~')
 
   // Check if running local installation but it's not in PATH
   if (type === 'npm-local') {
     // Check if the CLI is already accessible via PATH.
     const whichResult = (await which('forge')) || (await which('claude'))
     const cliInPath = !!whichResult
+    const localBinInPath = isDirectoryInPath(getUserLocalBinDir())
+    const shellType = getShellType()
 
     // Only show warning if the CLI is NOT in PATH AND no valid alias exists.
     if (!cliInPath && !validAlias) {
+      const configPaths = getShellConfigPaths()
+      const configFile = configPaths[shellType as keyof typeof configPaths]
+      const displayPath = configFile
+        ? configFile.replace(homedir(), '~')
+        : 'your shell config file'
+
+      if (!localBinInPath) {
+        warnings.push({
+          issue: 'Local installation launcher is not on your PATH',
+          fix: `Add ${localBinDirForDisplay} to PATH in ${displayPath}, or rerun the installer to recreate the managed launcher.`,
+        })
+      }
+
       if (existingAlias) {
         // Alias exists but points to invalid target
         warnings.push({
           issue: 'Local installation not accessible',
           fix: `Alias exists but points to invalid target: ${existingAlias}. Update alias: alias forge="${localForgePathForDisplay}"`,
         })
+      } else if (localBinInPath) {
+        warnings.push({
+          issue: 'Local installation launcher is missing',
+          fix: `Recreate the managed launcher at ${localBinDirForDisplay}/forge, or rerun the local installer/update flow.`,
+        })
       } else {
-        // No alias exists and not in PATH
+        // No alias exists and the managed launcher path is not configured.
         warnings.push({
           issue: 'Local installation not accessible',
-          fix: `Create alias: alias forge="${localForgePathForDisplay}"`,
+          fix: `If you prefer not to use PATH, create an alias: alias forge="${localForgePathForDisplay}"`,
         })
       }
     }

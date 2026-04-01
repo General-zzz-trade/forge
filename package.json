@@ -35,7 +35,9 @@
     "node": ">=20"
   },
   "scripts": {
+    "postinstall": "node scripts/setup-dev-global-path.mjs",
     "prepack": "bash -lc '\"${BUN_BIN:-$HOME/.bun/bin/bun}\" run generate'",
+    "setup:path": "node scripts/setup-dev-global-path.mjs",
     "generate:sdk": "bash -lc '\"${BUN_BIN:-$HOME/.bun/bin/bun}\" run scripts/generate-sdk-types.ts'",
     "generate:settings-schema": "bash -lc '\"${BUN_BIN:-$HOME/.bun/bin/bun}\" run scripts/generate-settings-schema.ts'",
     "generate": "bash -lc '\"${BUN_BIN:-$HOME/.bun/bin/bun}\" run scripts/generate-sdk-types.ts && \"${BUN_BIN:-$HOME/.bun/bin/bun}\" run scripts/generate-settings-schema.ts'",

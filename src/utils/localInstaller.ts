@@ -2,8 +2,9 @@
  * Utilities for handling local installation
  */
 
-import { access, chmod, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { access, chmod, readFile, rename, writeFile } from 'fs/promises'
+import { homedir } from 'os'
+import { dirname, join } from 'path'
 import { type ReleaseChannel, saveGlobalConfig } from './config.js'
 import {
   getClaudeConfigHomeDir,
@@ -14,6 +15,7 @@ import { execFileNoThrowWithCwd } from './execFileNoThrow.js'
 import { getFsImplementation } from './fsOperations.js'
 import { logError } from './log.js'
 import { jsonStringify } from './slowOperations.js'
+import { ensureDirectoryInShellPath, isDirectoryInPath } from './shellConfig.js'
 
 // Lazy getters: getClaudeConfigHomeDir() is memoized and reads process.env.
 // Evaluating at module scope would capture the value before entrypoints set a
@@ -28,6 +30,17 @@ export function getLocalClaudePath(): string {
 export function getLocalForgePath(): string {
   return join(getLocalInstallDir(), 'forge')
 }
+export function getUserLocalBinDir(): string {
+  return join(homedir(), '.local', 'bin')
+}
+export function getUserForgePath(): string {
+  return join(getUserLocalBinDir(), 'forge')
+}
+export function getUserClaudePath(): string {
+  return join(getUserLocalBinDir(), 'claude')
+}
+
+const MANAGED_LAUNCHER_MARKER_PREFIX = '# Managed by Forge'
 
 /**
  * Check if we're running from our managed local installation
@@ -72,6 +85,94 @@ async function ensureWrapperScript(
   if (created) {
     // Mode in writeFile is masked by umask; chmod to ensure executable bit.
     await chmod(wrapperPath, 0o755)
+  }
+}
+
+async function ensureManagedLauncher(
+  wrapperPath: string,
+  targetPath: string,
+  marker: string,
+): Promise<'created' | 'already_configured' | 'conflict'> {
+  try {
+    const existing = await readFile(wrapperPath, 'utf8')
+    if (
+      existing.includes(MANAGED_LAUNCHER_MARKER_PREFIX) &&
+      existing.includes(`exec "${targetPath}" "$@"`)
+    ) {
+      return 'already_configured'
+    }
+    if (existing.includes(MANAGED_LAUNCHER_MARKER_PREFIX)) {
+      // Managed wrapper from another Forge install path. Replace it atomically.
+    } else {
+      return 'conflict'
+    }
+  } catch (error) {
+    if (getErrnoCode(error) !== 'ENOENT') {
+      throw error
+    }
+  }
+
+  await getFsImplementation().mkdir(dirname(wrapperPath))
+  const tempPath = `${wrapperPath}.tmp-${process.pid}`
+  const content = `#!/bin/sh\n${marker}\nexec "${targetPath}" "$@"\n`
+  await writeFile(tempPath, content, { encoding: 'utf8', mode: 0o755 })
+  await chmod(tempPath, 0o755)
+  await rename(tempPath, wrapperPath)
+  return 'created'
+}
+
+export async function ensureLocalInstallLaunchers(): Promise<{
+  launcherCreated: boolean
+  pathUpdated: boolean
+  conflictingLauncherPath: string | null
+  updatedConfigPath: string | null
+}> {
+  let launcherCreated = false
+  let conflictingLauncherPath: string | null = null
+
+  const launchers = [
+    {
+      wrapperPath: getUserForgePath(),
+      targetPath: getLocalForgePath(),
+      marker: `${MANAGED_LAUNCHER_MARKER_PREFIX} local installation`,
+    },
+    {
+      wrapperPath: getUserClaudePath(),
+      targetPath: getLocalClaudePath(),
+      marker: `${MANAGED_LAUNCHER_MARKER_PREFIX} local installation`,
+    },
+  ]
+
+  for (const launcher of launchers) {
+    const result = await ensureManagedLauncher(
+      launcher.wrapperPath,
+      launcher.targetPath,
+      launcher.marker,
+    )
+    if (result === 'created') {
+      launcherCreated = true
+    } else if (result === 'conflict') {
+      conflictingLauncherPath ??= launcher.wrapperPath
+    }
+  }
+
+  const shellType = getShellType()
+  let pathUpdated = false
+  let updatedConfigPath: string | null = null
+  if (!isDirectoryInPath(getUserLocalBinDir())) {
+    const ensured = await ensureDirectoryInShellPath(
+      shellType,
+      getUserLocalBinDir(),
+    )
+    pathUpdated = ensured.updated
+    updatedConfigPath = ensured.configPath
+  }
+
+  return {
+    launcherCreated,
+    pathUpdated,
+    conflictingLauncherPath,
+    updatedConfigPath,
   }
 }
 
@@ -149,6 +250,15 @@ export async function installOrUpdateClaudePackage(
       ...current,
       installMethod: 'local',
     }))
+
+    const launcherSetup = await ensureLocalInstallLaunchers()
+    if (launcherSetup.conflictingLauncherPath) {
+      logError(
+        new Error(
+          `Local install launcher already exists and is not managed by Forge: ${launcherSetup.conflictingLauncherPath}`,
+        ),
+      )
+    }
 
     return 'success'
   } catch (error) {
