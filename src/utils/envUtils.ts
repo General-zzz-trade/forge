@@ -89,6 +89,34 @@ export function isEnvDefinedFalsy(
   return ['0', 'false', 'no', 'off'].includes(normalizedValue)
 }
 
+export function isClaudeHostedServiceAccessEnabled(): boolean {
+  return false
+}
+
+export function isManagedOauthAvailable(): boolean {
+  if (process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL) {
+    return true
+  }
+
+  if (
+    process.env.USER_TYPE === 'ant' &&
+    isEnvTruthy(process.env.USE_LOCAL_OAUTH)
+  ) {
+    return true
+  }
+
+  return false
+}
+
+export function getDisabledClaudeServiceBaseUrl(): string {
+  return (
+    process.env.FORGE_DISABLED_CLAUDE_SERVICE_BASE_URL ||
+    'http://127.0.0.1:8787'
+  )
+    .trim()
+    .replace(/\/$/, '')
+}
+
 /**
  * --bare / CLAUDE_CODE_SIMPLE — skip hooks, LSP, plugin sync, skill dir-walk,
  * attribution, background prefetches, and ALL keychain/credential reads.

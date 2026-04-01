@@ -1,5 +1,5 @@
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/index.js'
-import { isEnvTruthy } from '../envUtils.js'
+import { isEnvTruthy, isManagedOauthAvailable } from '../envUtils.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry'
 
@@ -28,7 +28,7 @@ export function isFirstPartyAnthropicBaseUrl(): boolean {
     process.env.ANTHROPIC_BASE_URL ||
     process.env.CLAUDE_CODE_API_BASE_URL
   if (!baseUrl) {
-    return true
+    return isManagedOauthAvailable()
   }
   try {
     const host = new URL(baseUrl).host

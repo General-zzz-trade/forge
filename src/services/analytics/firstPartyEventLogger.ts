@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto'
 import { isEqual } from 'lodash-es'
 import { getOrCreateUserID } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { isClaudeHostedServiceAccessEnabled } from '../../utils/envUtils.js'
 import { logError } from '../../utils/log.js'
 import { getPlatform, getWslVersion } from '../../utils/platform.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
@@ -140,7 +141,7 @@ export async function shutdown1PEventLogging(): Promise<void> {
  */
 export function is1PEventLoggingEnabled(): boolean {
   // Respect standard analytics opt-outs
-  return !isAnalyticsDisabled()
+  return !isAnalyticsDisabled() && isClaudeHostedServiceAccessEnabled()
 }
 
 /**

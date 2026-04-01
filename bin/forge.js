@@ -5,6 +5,66 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+// Re-spawn inside a PTY only when explicitly requested.
+// Auto-promoting a non-TTY launch into an interactive PTY can leave Forge
+// waiting forever in wrappers, CI, IDE launchers, or other piped contexts.
+// Use FORGE_FORCE_PTY=1 to opt in when the caller knows interactive TUI
+// behavior is desired and stdin is a real terminal.
+if (
+  process.env.FORGE_FORCE_PTY === '1' &&
+  process.stdin.isTTY &&
+  !process.stdout.isTTY &&
+  !process.env.FORGE_IN_PTY &&
+  process.platform !== 'win32'
+) {
+  const args = process.argv.slice(2)
+  const nonInteractiveFlags = ['-p', '--print', '--version', '-v', '-V', 'mcp', '--init-only']
+  const isNonInteractive = args.some(a => nonInteractiveFlags.includes(a))
+
+  if (!isNonInteractive) {
+    // Build the command to re-run this script
+    const selfCmd = [process.execPath, process.argv[1], ...args]
+      .map(a => `'${a.replace(/'/g, "'\\''")}'`)
+      .join(' ')
+
+    // Try `script` first (util-linux, Linux)
+    const scriptProbe = spawnSync('script', ['--version'], { stdio: 'ignore' })
+    if (scriptProbe.status === 0) {
+      const result = spawnSync(
+        'script',
+        ['-q', '-e', '-c', selfCmd, '/dev/null'],
+        {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            FORGE_IN_PTY: '1',
+            FORCE_INTERACTIVE: '1',
+          },
+        },
+      )
+      process.exit(result.status ?? 1)
+    }
+
+    // Fallback: socat
+    const socatProbe = spawnSync('socat', ['-V'], { stdio: 'ignore' })
+    if (socatProbe.status === 0) {
+      const result = spawnSync(
+        'socat',
+        ['-,raw,echo=0', `EXEC:${selfCmd},pty,setsid,ctty`],
+        {
+          stdio: 'inherit',
+          env: {
+            ...process.env,
+            FORGE_IN_PTY: '1',
+            FORCE_INTERACTIVE: '1',
+          },
+        },
+      )
+      process.exit(result.status ?? 1)
+    }
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const rootDir = path.resolve(__dirname, '..')

@@ -13,6 +13,7 @@ import { refreshGrowthBookAfterAuthChange } from '../../services/analytics/growt
 import { refreshPolicyLimits } from '../../services/policyLimits/index.js';
 import { refreshRemoteManagedSettings } from '../../services/remoteManagedSettings/index.js';
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
+import { isManagedOauthAvailable } from '../../utils/envUtils.js';
 import { stripSignatureBlocks } from '../../utils/messages.js';
 import { checkAndDisableAutoModeIfNeeded, checkAndDisableBypassPermissionsIfNeeded, resetAutoModeGateCheck, resetBypassPermissionsCheck } from '../../utils/permissions/bypassPermissionsKillswitch.js';
 import { resetUserCache } from '../../utils/user.js';
@@ -60,6 +61,9 @@ export async function call(onDone: LocalJSXCommandOnDone, context: LocalJSXComma
 export function Login(props) {
   const $ = _c(12);
   const mainLoopModel = useMainLoopModel();
+  if (!isManagedOauthAvailable()) {
+    return <Dialog title="Login" onCancel={() => props.onDone(false, mainLoopModel)} color="permission" inputGuide={_temp}><Text>Managed OAuth is disabled in this Forge build. Configure <Text bold={true}>ANTHROPIC_BASE_URL</Text> or <Text bold={true}>FORGE_API_BASE_URL</Text> for your own endpoint.</Text></Dialog>;
+  }
   let t0;
   if ($[0] !== mainLoopModel || $[1] !== props) {
     t0 = () => props.onDone(false, mainLoopModel);

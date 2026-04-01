@@ -582,6 +582,42 @@ const _pendingSSH: PendingSSH | undefined = feature('SSH_REMOTE') ? {
   local: false,
   extraCliArgs: []
 } : undefined;
+function getStartupNetworkPrefetchPolicy(): {
+  enabled: boolean;
+  reason: string;
+} {
+  if (isBareMode()) {
+    return {
+      enabled: false,
+      reason: 'bare mode'
+    };
+  }
+  if (isEnvTruthy(process.env.FORGE_OFFLINE) || isEnvTruthy(process.env.CLAUDE_CODE_OFFLINE)) {
+    return {
+      enabled: false,
+      reason: 'offline mode'
+    };
+  }
+  // Forge defaults to a local-first startup: no outbound cache-warming
+  // traffic until explicitly opted back in.
+  if (!isEnvTruthy(process.env.FORGE_ENABLE_STARTUP_PREFETCH) && !isEnvTruthy(process.env.CLAUDE_CODE_ENABLE_STARTUP_PREFETCH)) {
+    return {
+      enabled: false,
+      reason: 'startup network prefetch disabled by default'
+    };
+  }
+  const hasFirstPartyAuth = !!getGlobalConfig().oauthAccount || !!process.env.ANTHROPIC_API_KEY || !!process.env.ANTHROPIC_AUTH_TOKEN || !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (!hasFirstPartyAuth) {
+    return {
+      enabled: false,
+      reason: 'no authenticated first-party session'
+    };
+  }
+  return {
+    enabled: true,
+    reason: 'enabled'
+  };
+}
 export async function main() {
   profileCheckpoint('main_function_start');
 
@@ -800,7 +836,8 @@ export async function main() {
   const hasPrintFlag = cliArgs.includes('-p') || cliArgs.includes('--print');
   const hasInitOnlyFlag = cliArgs.includes('--init-only');
   const hasSdkUrl = cliArgs.some(arg => arg.startsWith('--sdk-url'));
-  const isNonInteractive = hasPrintFlag || hasInitOnlyFlag || hasSdkUrl || !process.stdout.isTTY;
+  const hasForceInteractive = cliArgs.includes('--interactive') || isEnvTruthy(process.env.FORCE_INTERACTIVE)
+  const isNonInteractive = hasPrintFlag || hasInitOnlyFlag || hasSdkUrl || (!process.stdout.isTTY && !hasForceInteractive)
 
   // Stop capturing early input for non-interactive modes
   if (isNonInteractive) {
@@ -2456,7 +2493,9 @@ async function run(): Promise<CommanderCommand> {
     // mode doesn't apply to the Agent SDK anyway (see getFastModeUnavailableReason).
     const bgRefreshThrottleMs = getFeatureValue_CACHED_MAY_BE_STALE('tengu_cicada_nap_ms', 0);
     const lastPrefetched = getGlobalConfig().startupPrefetchedAt ?? 0;
-    const skipStartupPrefetches = isBareMode() || bgRefreshThrottleMs > 0 && Date.now() - lastPrefetched < bgRefreshThrottleMs;
+    const startupPrefetchPolicy = getStartupNetworkPrefetchPolicy();
+    const isStartupPrefetchThrottled = bgRefreshThrottleMs > 0 && Date.now() - lastPrefetched < bgRefreshThrottleMs;
+    const skipStartupPrefetches = !startupPrefetchPolicy.enabled || isStartupPrefetchThrottled;
     if (!skipStartupPrefetches) {
       const lastPrefetchedInfo = lastPrefetched > 0 ? ` last ran ${Math.round((Date.now() - lastPrefetched) / 1000)}s ago` : '';
       logForDebugging(`Starting background startup prefetches${lastPrefetchedInfo}`);
@@ -2482,7 +2521,8 @@ async function run(): Promise<CommanderCommand> {
         }));
       }
     } else {
-      logForDebugging(`Skipping startup prefetches, last ran ${Math.round((Date.now() - lastPrefetched) / 1000)}s ago`);
+      const skipReason = !startupPrefetchPolicy.enabled ? startupPrefetchPolicy.reason : `throttled, last ran ${Math.round((Date.now() - lastPrefetched) / 1000)}s ago`;
+      logForDebugging(`Skipping startup prefetches: ${skipReason}`);
       // Resolve fast mode org status from cache (no network)
       resolveFastModeStatusFromCache();
     }

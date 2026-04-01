@@ -52,6 +52,7 @@ import { logAntError, logForDebugging } from './debug.js'
 import {
   getClaudeConfigHomeDir,
   isBareMode,
+  isManagedOauthAvailable,
   isEnvTruthy,
   isRunningOnHomespace,
 } from './envUtils.js'
@@ -101,6 +102,8 @@ function isManagedOAuthContext(): boolean {
 export function isAnthropicAuthEnabled(): boolean {
   // --bare: API-key-only, never OAuth.
   if (isBareMode()) return false
+
+  if (!isManagedOauthAvailable()) return false
 
   // `claude ssh` remote: ANTHROPIC_UNIX_SOCKET tunnels API calls through a
   // local auth-injecting proxy. The launcher sets CLAUDE_CODE_OAUTH_TOKEN as a
@@ -200,6 +203,10 @@ export function getAuthTokenSource() {
           : ('forge' as const),
       hasToken: true,
     }
+  }
+
+  if (!isManagedOauthAvailable()) {
+    return { source: 'none' as const, hasToken: false }
   }
 
   // Check if apiKeyHelper is configured without executing it

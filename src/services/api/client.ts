@@ -3,8 +3,8 @@ import { randomUUID } from 'crypto'
 import type { GoogleAuth } from 'google-auth-library'
 import {
   getActiveForgeSession,
+  getAuthenticatedApiBaseUrl,
   getPreferredForgeModelProvider,
-  requireForgeApiBaseUrl,
 } from 'src/services/auth/runtime.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -106,9 +106,16 @@ export async function getAnthropicClient({
   const activeSession =
     getAPIProvider() === 'firstParty' ? getActiveForgeSession() : null
   const forgeSession = activeSession?.issuer === 'forge' ? activeSession : null
+  const authenticatedBaseUrl =
+    getAPIProvider() === 'firstParty' ? getAuthenticatedApiBaseUrl() : null
   if (activeSession?.issuer === 'openai') {
     throw new Error(
       'Native OpenAI sessions no longer depend on Forge broker/bootstrap, but the OpenAI-native model runtime is not wired into this Anthropic client path yet.',
+    )
+  }
+  if (getAPIProvider() === 'firstParty' && !authenticatedBaseUrl) {
+    throw new Error(
+      'Claude-hosted services are disabled in this Forge build. Configure ANTHROPIC_BASE_URL or FORGE_API_BASE_URL for your own endpoint.',
     )
   }
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
@@ -335,13 +342,7 @@ export async function getAnthropicClient({
       : isClaudeAISubscriber()
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
-    // Set baseURL from OAuth config when using staging OAuth
-    ...(forgeSession
-      ? { baseURL: requireForgeApiBaseUrl() }
-      : process.env.USER_TYPE === 'ant' &&
-          isEnvTruthy(process.env.USE_STAGING_OAUTH)
-        ? { baseURL: getOauthConfig().BASE_API_URL }
-        : {}),
+    ...(authenticatedBaseUrl ? { baseURL: authenticatedBaseUrl } : {}),
     ...ARGS,
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }

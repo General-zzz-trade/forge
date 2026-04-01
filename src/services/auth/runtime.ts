@@ -1,5 +1,6 @@
 import { getOauthConfig } from '../../constants/oauth.js'
 import { getGlobalConfig } from '../../utils/config.js'
+import { isManagedOauthAvailable } from '../../utils/envUtils.js'
 import { getForgeSession } from './storage.js'
 import type {
   ForgeSession,
@@ -59,6 +60,19 @@ export function getAuthenticatedApiBaseUrl(): string | null {
     return getForgeApiBaseUrl()
   }
   if (session?.issuer === 'openai') {
+    return null
+  }
+
+  const configuredBaseUrl = normalizeBaseUrl(
+    process.env.ANTHROPIC_BASE_URL ||
+      process.env.FORGE_API_BASE_URL ||
+      process.env.CLAUDE_CODE_API_BASE_URL,
+  )
+  if (configuredBaseUrl) {
+    return configuredBaseUrl
+  }
+
+  if (!isManagedOauthAvailable()) {
     return null
   }
 

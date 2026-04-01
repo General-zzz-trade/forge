@@ -1,4 +1,8 @@
-import { isEnvTruthy } from 'src/utils/envUtils.js'
+import {
+  getDisabledClaudeServiceBaseUrl,
+  isEnvTruthy,
+  isManagedOauthAvailable,
+} from 'src/utils/envUtils.js'
 
 // Default to prod config, override with test/staging if enabled
 type OauthConfigType = 'prod' | 'staging' | 'local'
@@ -16,6 +20,9 @@ function getOauthConfigType(): OauthConfigType {
 }
 
 export function fileSuffixForOauthConfig(): string {
+  if (!isManagedOauthAvailable()) {
+    return '-disabled-oauth'
+  }
   if (process.env.CLAUDE_CODE_CUSTOM_OAUTH_URL) {
     return '-custom-oauth'
   }
@@ -176,6 +183,26 @@ function getLocalOauthConfig(): OauthConfig {
   }
 }
 
+function getDisabledOauthConfig(): OauthConfig {
+  const base = getDisabledClaudeServiceBaseUrl()
+  return {
+    BASE_API_URL: base,
+    CONSOLE_AUTHORIZE_URL: `${base}/oauth/authorize`,
+    CLAUDE_AI_AUTHORIZE_URL: `${base}/oauth/authorize`,
+    CLAUDE_AI_ORIGIN: base,
+    TOKEN_URL: `${base}/v1/oauth/token`,
+    API_KEY_URL: `${base}/api/oauth/claude_cli/create_api_key`,
+    ROLES_URL: `${base}/api/oauth/claude_cli/roles`,
+    CONSOLE_SUCCESS_URL: `${base}/oauth/code/success?app=forge`,
+    CLAUDEAI_SUCCESS_URL: `${base}/oauth/code/success?app=forge`,
+    MANUAL_REDIRECT_URL: `${base}/oauth/code/callback`,
+    CLIENT_ID: 'forge-disabled',
+    OAUTH_FILE_SUFFIX: '-disabled-oauth',
+    MCP_PROXY_URL: base,
+    MCP_PROXY_PATH: '/v1/mcp/{server_id}',
+  }
+}
+
 // Allowed base URLs for CLAUDE_CODE_CUSTOM_OAUTH_URL override.
 // Only FedStart/PubSec deployments are permitted to prevent OAuth tokens
 // from being sent to arbitrary endpoints.
@@ -187,6 +214,10 @@ const ALLOWED_OAUTH_BASE_URLS = [
 
 // Default to prod config, override with test/staging if enabled
 export function getOauthConfig(): OauthConfig {
+  if (!isManagedOauthAvailable()) {
+    return getDisabledOauthConfig()
+  }
+
   let config: OauthConfig = (() => {
     switch (getOauthConfigType()) {
       case 'local':

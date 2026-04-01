@@ -25,7 +25,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { detectCurrentRepository } from '../utils/detectRepository.js'
 import { logForDiagnosticsNoPII } from '../utils/diagLogs.js'
 import { initJetBrainsDetection } from '../utils/envDynamic.js'
-import { isEnvTruthy } from '../utils/envUtils.js'
+import { isEnvTruthy, isManagedOauthAvailable } from '../utils/envUtils.js'
 import { ConfigParseError, errorMessage } from '../utils/errors.js'
 // showInvalidConfigDialog is dynamically imported in the error path to avoid loading React at init
 import {
@@ -91,23 +91,27 @@ export const init = memoize(async (): Promise<void> => {
     // loading OpenTelemetry sdk-logs at startup). growthbook.js is already in
     // the module cache by this point (firstPartyEventLogger imports it), so the
     // second dynamic import adds no load cost.
-    void Promise.all([
-      import('../services/analytics/firstPartyEventLogger.js'),
-      import('../services/analytics/growthbook.js'),
-    ]).then(([fp, gb]) => {
-      fp.initialize1PEventLogging()
-      // Rebuild the logger provider if tengu_1p_event_batch_config changes
-      // mid-session. Change detection (isEqual) is inside the handler so
-      // unchanged refreshes are no-ops.
-      gb.onGrowthBookRefresh(() => {
-        void fp.reinitialize1PEventLoggingIfConfigChanged()
+    if (isManagedOauthAvailable()) {
+      void Promise.all([
+        import('../services/analytics/firstPartyEventLogger.js'),
+        import('../services/analytics/growthbook.js'),
+      ]).then(([fp, gb]) => {
+        fp.initialize1PEventLogging()
+        // Rebuild the logger provider if tengu_1p_event_batch_config changes
+        // mid-session. Change detection (isEqual) is inside the handler so
+        // unchanged refreshes are no-ops.
+        gb.onGrowthBookRefresh(() => {
+          void fp.reinitialize1PEventLoggingIfConfigChanged()
+        })
       })
-    })
+    }
     profileCheckpoint('init_after_1p_event_logging')
 
     // Populate OAuth account info if it is not already cached in config. This is needed since the
     // OAuth account info may not be populated when logging in through the VSCode extension.
-    void populateOAuthAccountInfoIfNeeded()
+    if (isManagedOauthAvailable()) {
+      void populateOAuthAccountInfoIfNeeded()
+    }
     profileCheckpoint('init_after_oauth_populate')
 
     // Initialize JetBrains IDE detection asynchronously (populates cache for later sync access)
@@ -156,7 +160,9 @@ export const init = memoize(async (): Promise<void> => {
     // connection uses the right transport. Fire-and-forget; skipped for
     // proxy/mTLS/unix/cloud-provider where the SDK's dispatcher wouldn't
     // reuse the global pool.
-    preconnectAnthropicApi()
+    if (isManagedOauthAvailable()) {
+      preconnectAnthropicApi()
+    }
 
     // CCR upstreamproxy: start the local CONNECT relay so agent subprocesses
     // can reach org-configured upstreams with credential injection. Gated on

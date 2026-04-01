@@ -20,6 +20,7 @@ import {
 import type { AccountInfo } from '../../utils/config.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { isManagedOauthAvailable } from '../../utils/envUtils.js'
 import { getOauthProfileFromOauthToken } from './getOauthProfile.js'
 import type {
   BillingType,
@@ -449,6 +450,10 @@ export async function getOrganizationUUID(): Promise<string | null> {
  * @returns Whether or not the oauth account info was populated.
  */
 export async function populateOAuthAccountInfoIfNeeded(): Promise<boolean> {
+  if (!isManagedOauthAvailable()) {
+    return false
+  }
+
   // Check env vars first (synchronous, no network call needed).
   // SDK callers like Cowork can provide account info directly, which also
   // eliminates the race condition where early telemetry events lack account info.
