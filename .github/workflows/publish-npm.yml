@@ -12,6 +12,8 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      NPM_CONFIG_CACHE: ${{ runner.temp }}/npm-cache
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,8 +29,17 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: Verify npm token configured
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN secret is missing. Configure repository secret NPM_TOKEN before publishing."
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Install dependencies
-        run: npm install
+        run: npm install --ignore-scripts
 
       - name: Verify package version matches tag
         run: |

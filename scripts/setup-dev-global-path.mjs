@@ -19,6 +19,10 @@ const pathBlockStart = '# >>> forge source checkout path >>>'
 const pathBlockEnd = '# <<< forge source checkout path <<<'
 
 function isSourceCheckoutInstall() {
+  if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') {
+    return false
+  }
+
   if (process.env.npm_config_global === 'true') {
     return false
   }
