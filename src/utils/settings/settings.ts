@@ -12,7 +12,11 @@ import { getRemoteManagedSettingsSyncFromCache } from '../../services/remoteMana
 import { uniq } from '../array.js'
 import { logForDebugging } from '../debug.js'
 import { logForDiagnosticsNoPII } from '../diagLogs.js'
-import { getClaudeConfigHomeDir, isEnvTruthy } from '../envUtils.js'
+import {
+  getClaudeConfigHomeDir,
+  getLegacyClaudeConfigHomeDir,
+  isEnvTruthy,
+} from '../envUtils.js'
 import { getErrnoCode, isENOENT } from '../errors.js'
 import { writeFileSyncAndFlush_DEPRECATED } from '../file.js'
 import { readFileSync } from '../fileRead.js'
@@ -272,15 +276,27 @@ function getUserSettingsFilePath(): string {
   return 'settings.json'
 }
 
+function getPreferredUserSettingsFilePath(): string {
+  const filename = getUserSettingsFilePath()
+  const preferredPath = join(getClaudeConfigHomeDir(), filename)
+  const legacyPath = join(getLegacyClaudeConfigHomeDir(), filename)
+  const fs = getFsImplementation()
+
+  if (fs.existsSync(preferredPath)) {
+    return preferredPath
+  }
+  if (fs.existsSync(legacyPath)) {
+    return legacyPath
+  }
+  return preferredPath
+}
+
 export function getSettingsFilePathForSource(
   source: SettingSource,
 ): string | undefined {
   switch (source) {
     case 'userSettings':
-      return join(
-        getSettingsRootPathForSource(source),
-        getUserSettingsFilePath(),
-      )
+      return getPreferredUserSettingsFilePath()
     case 'projectSettings':
     case 'localSettings': {
       return join(

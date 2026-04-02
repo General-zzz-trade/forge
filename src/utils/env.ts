@@ -1,6 +1,5 @@
 import memoize from 'lodash-es/memoize.js'
-import { homedir } from 'os'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { fileSuffixForOauthConfig } from '../constants/oauth.js'
 import { isRunningWithBun } from './bundledMode.js'
 import {
@@ -16,11 +15,16 @@ import { which } from './which.js'
 type Platform = 'win32' | 'darwin' | 'linux'
 
 function getGlobalConfigBaseDir(): string {
-  return (
-    process.env[FORGE_CONFIG_DIR_ENV] ??
-    process.env[CLAUDE_CONFIG_DIR_ENV] ??
-    homedir()
-  )
+  const explicitBaseDir =
+    process.env[FORGE_CONFIG_DIR_ENV] ?? process.env[CLAUDE_CONFIG_DIR_ENV]
+  if (explicitBaseDir) {
+    return explicitBaseDir
+  }
+
+  // Keep the legacy ~/.forge*.json naming scheme, but anchor it next to the
+  // resolved config home instead of blindly using homedir(). This lets Forge
+  // fall back to a writable config home when HOME itself is read-only.
+  return dirname(getClaudeConfigHomeDir())
 }
 
 // Config and data paths

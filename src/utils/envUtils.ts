@@ -1,10 +1,11 @@
-import { existsSync, readdirSync } from 'fs'
+import { accessSync, constants, existsSync, readdirSync } from 'fs'
 import memoize from 'lodash-es/memoize.js'
-import { homedir } from 'os'
-import { join } from 'path'
+import { homedir, tmpdir } from 'os'
+import { dirname, join } from 'path'
 
 export const FORGE_CONFIG_DIR_ENV = 'FORGE_CONFIG_DIR'
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR'
+export const FORGE_USE_LEGACY_CONFIG_DIR_ENV = 'FORGE_USE_LEGACY_CONFIG_DIR'
 
 export function getDefaultForgeConfigHomeDir(): string {
   return join(homedir(), '.forge').normalize('NFC')
@@ -12,6 +13,34 @@ export function getDefaultForgeConfigHomeDir(): string {
 
 export function getLegacyClaudeConfigHomeDir(): string {
   return join(homedir(), '.claude').normalize('NFC')
+}
+
+function isWritableDirectory(path: string): boolean {
+  try {
+    accessSync(path, constants.R_OK | constants.W_OK | constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function canCreateInParent(path: string): boolean {
+  try {
+    accessSync(dirname(path), constants.W_OK | constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function isUsableConfigHomeDir(path: string): boolean {
+  return existsSync(path) ? isWritableDirectory(path) : canCreateInParent(path)
+}
+
+function getFallbackForgeConfigHomeDir(): string {
+  const uid =
+    typeof process.getuid === 'function' ? String(process.getuid()) : 'user'
+  return join(tmpdir(), `forge-config-${uid}`).normalize('NFC')
 }
 
 function hasDirectoryEntries(path: string): boolean {
@@ -31,16 +60,33 @@ function resolveConfigHomeDir(): string {
 
   const forgeConfigDir = getDefaultForgeConfigHomeDir()
   const legacyConfigDir = getLegacyClaudeConfigHomeDir()
-  const forgeExists = existsSync(forgeConfigDir)
-  const legacyExists = existsSync(legacyConfigDir)
+  const useLegacyConfigDir = isEnvTruthy(
+    process.env[FORGE_USE_LEGACY_CONFIG_DIR_ENV],
+  )
 
-  if (forgeExists && (!legacyExists || hasDirectoryEntries(forgeConfigDir))) {
-    return forgeConfigDir
-  }
-  if (legacyExists) {
+  // Forge now treats ~/.forge as the primary config home.
+  // Legacy ~/.claude remains a compatibility source for individual files,
+  // but it should not become the default runtime directory just because it
+  // happens to exist. Otherwise startup keeps inheriting stale plugin state,
+  // session metadata, and migration work from old installs.
+  if (useLegacyConfigDir && existsSync(legacyConfigDir)) {
     return legacyConfigDir
   }
-  return forgeConfigDir
+
+  const forgeExists = existsSync(forgeConfigDir)
+  if (forgeExists && hasDirectoryEntries(forgeConfigDir)) {
+    return forgeConfigDir
+  }
+
+  if (isUsableConfigHomeDir(forgeConfigDir)) {
+    return forgeConfigDir
+  }
+
+  if (useLegacyConfigDir && isUsableConfigHomeDir(legacyConfigDir)) {
+    return legacyConfigDir
+  }
+
+  return getFallbackForgeConfigHomeDir()
 }
 
 export function isUsingDefaultConfigHomeDir(): boolean {
@@ -53,7 +99,7 @@ export function isUsingDefaultConfigHomeDir(): boolean {
 export const getClaudeConfigHomeDir = memoize(
   (): string => resolveConfigHomeDir(),
   () =>
-    `${process.env[FORGE_CONFIG_DIR_ENV] ?? ''}\0${process.env[CLAUDE_CONFIG_DIR_ENV] ?? ''}`,
+    `${process.env[FORGE_CONFIG_DIR_ENV] ?? ''}\0${process.env[CLAUDE_CONFIG_DIR_ENV] ?? ''}\0${process.env[FORGE_USE_LEGACY_CONFIG_DIR_ENV] ?? ''}`,
 )
 
 export function getTeamsDir(): string {
