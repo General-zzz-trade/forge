@@ -88,6 +88,69 @@ npm run recovery:audit
 npm run preflight:openai
 ```
 
+## 启动机制
+
+Forge 当前的启动链路分为 4 层：
+
+1. 命令入口层：你在终端执行 `forge`、`npx forge`、`npm start`，或者直接运行 `bash scripts/run-forge-cli.sh`。
+2. 启动包装层：`forge` 命令先进入 [bin/forge.js](bin/forge.js)，负责定位 Bun、读取版本号，并把参数转发给真实 CLI 入口。
+3. 运行时层：`bin/forge.js` 或 `scripts/run-forge-cli.sh` 最终都会执行 `bun run src/entrypoints/cli.tsx`，这才是实际的命令行程序入口。
+4. 主流程层：CLI 入口进入 `src/main.tsx`，根据参数决定走交互式 REPL、`--print` 非交互模式、认证命令或其他子命令。
+
+当前源码目录下最常见的启动路径是：
+
+```text
+forge
+  -> bin/forge.js
+  -> bun run src/entrypoints/cli.tsx
+  -> src/main.tsx
+  -> 进入欢迎页 / 交互界面 / 非交互执行
+```
+
+如果你执行的是：
+
+```bash
+npm start
+```
+
+则会先运行：
+
+```bash
+bun run generate
+```
+
+用于重新生成派生类型和设置结构，然后再进入 `scripts/run-forge-cli.sh`。因此：
+
+- `forge` 适合日常直接启动
+- `npm start` 适合开发态，确保派生文件在启动前更新
+- `bash scripts/run-forge-cli.sh` 适合排查问题，路径最直接
+
+当前启动阶段默认优先完成本地初始化，不再强制依赖外网预取。也就是说，Forge 可以先进入界面，再决定是否登录和发起后续请求。
+
+### 启动验证建议
+
+检查命令本身是否正常：
+
+```bash
+forge --version
+forge --help
+```
+
+验证是否能够进入界面：
+
+```bash
+forge
+```
+
+如果你想在不污染现有配置的情况下做一次干净启动验证，可以使用临时 `HOME`：
+
+```bash
+mkdir -p /tmp/forge-start-home
+HOME=/tmp/forge-start-home forge
+```
+
+这适合排查“到底是程序本身起不来，还是现有本地配置有问题”。
+
 ### 直接使用仓库启动脚本
 
 如果你需要最明确的开发态入口，可直接运行：

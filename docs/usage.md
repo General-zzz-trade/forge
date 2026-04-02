@@ -64,6 +64,52 @@ npm start
 npm run version
 ```
 
+## 启动机制
+
+当前项目的真实启动流程如下：
+
+```text
+forge
+  -> bin/forge.js
+  -> 定位 Bun 运行时
+  -> bun run src/entrypoints/cli.tsx
+  -> src/main.tsx
+  -> 进入交互界面、--print、auth 或其他子命令
+```
+
+不同入口的区别：
+
+- `forge`：最适合日常使用，直接进入启动包装器。
+- `npx forge`：适合 PATH 还没刷新时使用，本质上仍然调用同一个 `bin/forge.js`。
+- `npm start`：会先执行 `bun run generate`，再进入 `scripts/run-forge-cli.sh`，更适合开发调试。
+- `bash scripts/run-forge-cli.sh`：最接近底层的开发入口，适合排查启动问题。
+
+与旧版本不同，当前启动阶段默认不再依赖启动时外网预取。Forge 会先完成本地配置读取、命令注册和界面初始化，再进入欢迎页或命令执行阶段。
+
+### 推荐的启动排查顺序
+
+先确认命令入口正常：
+
+```bash
+forge --version
+forge --help
+```
+
+再确认界面是否能够起来：
+
+```bash
+forge
+```
+
+如果怀疑是本地配置导致的问题，用临时 `HOME` 重新验证：
+
+```bash
+mkdir -p /tmp/forge-start-home
+HOME=/tmp/forge-start-home forge
+```
+
+如果这样可以正常进入界面，说明启动链路本身没有坏，问题更可能出在原有配置目录或历史状态。
+
 ## 登录方式
 
 ### 推荐方式：导入 Codex CLI 登录
