@@ -16,7 +16,7 @@
 
 import { dirname, join } from 'path'
 import { logForDebugging } from '../debug.js'
-import { errorMessage, isENOENT, toError } from '../errors.js'
+import { errorMessage, isENOENT, isFsInaccessible, toError } from '../errors.js'
 import { getFsImplementation } from '../fsOperations.js'
 import { logError } from '../log.js'
 import {
@@ -179,6 +179,14 @@ export function migrateToSinglePluginFile(): void {
     migrationCompleted = true
   } catch (error) {
     const errorMsg = errorMessage(error)
+    if (isFsInaccessible(error)) {
+      logForDebugging(
+        `Skipping plugin state migration: ${errorMsg}`,
+        { level: 'warn' },
+      )
+      migrationCompleted = true
+      return
+    }
     logForDebugging(`Failed to migrate plugin files: ${errorMsg}`, {
       level: 'error',
     })
@@ -395,7 +403,14 @@ function saveInstalledPluginsV2(data: InstalledPluginsFileV2): void {
       `Saved ${Object.keys(data.plugins).length} installed plugins to ${filePath}`,
     )
   } catch (error) {
-    const _errorMsg = errorMessage(error)
+    if (isFsInaccessible(error)) {
+      installedPluginsCacheV2 = data
+      logForDebugging(
+        `Skipping installed plugin state write: ${errorMessage(error)}`,
+        { level: 'warn' },
+      )
+      return
+    }
     logError(toError(error))
     throw error
   }

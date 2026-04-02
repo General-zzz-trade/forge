@@ -25,7 +25,11 @@ import { logForDebugging } from '../utils/debug.js'
 import { detectCurrentRepository } from '../utils/detectRepository.js'
 import { logForDiagnosticsNoPII } from '../utils/diagLogs.js'
 import { initJetBrainsDetection } from '../utils/envDynamic.js'
-import { isEnvTruthy, isManagedOauthAvailable } from '../utils/envUtils.js'
+import {
+  getConfigHomeDirResolution,
+  isEnvTruthy,
+  isManagedOauthAvailable,
+} from '../utils/envUtils.js'
 import { ConfigParseError, errorMessage } from '../utils/errors.js'
 // showInvalidConfigDialog is dynamically imported in the error path to avoid loading React at init
 import {
@@ -77,6 +81,13 @@ export const init = memoize(async (): Promise<void> => {
     // before any TLS connections. Bun caches the TLS cert store at boot
     // via BoringSSL, so this must happen before the first TLS handshake.
     applyExtraCACertsFromConfig()
+    const configHomeResolution = getConfigHomeDirResolution()
+    logForDebugging(
+      `[init] config home: ${configHomeResolution.path} (${configHomeResolution.reason})`,
+    )
+    logForDiagnosticsNoPII('info', 'init_config_home_selected', {
+      source: configHomeResolution.source,
+    })
 
     logForDiagnosticsNoPII('info', 'init_safe_env_vars_applied', {
       duration_ms: Date.now() - envVarsStart,

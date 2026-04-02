@@ -18,7 +18,7 @@ import {
 import { randomBytes } from 'crypto'
 import { createServer, type Server } from 'http'
 import { parse } from 'url'
-import xss from 'xss'
+import xss from '../../vendor/xss.js'
 import { openBrowser } from '../../utils/browser.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { toError } from '../../utils/errors.js'

@@ -1,5 +1,6 @@
 import { feature } from 'bun:bundle';
 import { appendFileSync } from 'fs';
+import { homedir } from 'os';
 import React from 'react';
 import { logEvent } from 'src/services/analytics/index.js';
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
@@ -19,16 +20,81 @@ import { AppStateProvider } from './state/AppState.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { normalizeApiKeyForConfig } from './utils/authPortable.js';
 import { getExternalInstructionIncludes, getMemoryFiles, shouldShowInstructionExternalIncludesWarning } from './utils/instructions.js';
-import { checkHasTrustDialogAccepted, getCustomApiKeyStatus, getGlobalConfig, saveGlobalConfig } from './utils/config.js';
+import { checkHasTrustDialogAccepted, getCustomApiKeyStatus, getGlobalConfig, saveCurrentProjectConfig, saveGlobalConfig } from './utils/config.js';
 import { updateDeepLinkTerminalPreference } from './utils/deepLink/terminalPreference.js';
 import { isEnvTruthy, isRunningOnHomespace } from './utils/envUtils.js';
 import { type FpsMetrics, FpsTracker } from './utils/fpsTracker.js';
 import { updateGithubRepoPathMapping } from './utils/githubRepoPathMapping.js';
 import { applyConfigEnvironmentVariables } from './utils/managedEnv.js';
+import { logForDebugging } from './utils/debug.js';
 import type { PermissionMode } from './utils/permissions/PermissionMode.js';
 import { getBaseRenderOptions } from './utils/renderOptions.js';
+import { getCwd } from './utils/cwd.js';
 import { getSettingsWithAllErrors } from './utils/settings/allErrors.js';
 import { hasAutoModeOptIn, hasSkipDangerousModePermissionPrompt } from './utils/settings/settings.js';
+
+function shouldUsePlainStartupDialogs(): boolean {
+  if (isEnvTruthy(process.env.FORGE_FORCE_INK_SETUP)) {
+    return false;
+  }
+  if (isEnvTruthy(process.env.FORGE_PLAIN_STARTUP)) {
+    return true;
+  }
+  return typeof process.env.SSH_TTY === 'string' && process.env.SSH_TTY.length > 0;
+}
+
+async function promptPlainYesNo(prompt: string, defaultYes: boolean): Promise<boolean> {
+  const {
+    createInterface
+  } = await import('node:readline/promises');
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr
+  });
+  try {
+    const answer = (await rl.question(prompt)).trim().toLowerCase();
+    if (!answer) {
+      return defaultYes;
+    }
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
+async function runPlainStartupSetup(): Promise<boolean> {
+  let onboardingShown = false;
+  const config = getGlobalConfig();
+  if (!config.theme || !config.hasCompletedOnboarding) {
+    onboardingShown = true;
+    process.stderr.write('\nForge plain startup mode: SSH terminal detected. Applying default first-run settings and continuing without the Ink setup screen.\n');
+    saveGlobalConfig(current => ({
+      ...current,
+      theme: current.theme ?? 'dark',
+      hasCompletedOnboarding: true,
+      lastOnboardingVersion: MACRO.VERSION
+    }));
+  }
+  if (!checkHasTrustDialogAccepted()) {
+    const cwd = getCwd();
+    process.stderr.write(`\nForge needs workspace trust before it can operate in:\n${cwd}\n`);
+    const trusted = await promptPlainYesNo('Trust this folder and continue? [y/N] ', false);
+    if (!trusted) {
+      process.stderr.write('Startup cancelled because the workspace was not trusted.\n');
+      gracefulShutdownSync(1);
+    }
+    if (homedir() === cwd) {
+      setSessionTrustAccepted(true);
+    } else {
+      saveCurrentProjectConfig(current => ({
+        ...current,
+        hasTrustDialogAccepted: true
+      }));
+    }
+    process.stderr.write('Workspace trusted. Continuing Forge startup...\n');
+  }
+  return onboardingShown;
+}
 export function completeOnboarding(): void {
   saveGlobalConfig(current => ({
     ...current,
@@ -105,6 +171,21 @@ export async function showSetupScreens(root: Root, permissionMode: PermissionMod
   if ("production" === 'test' || isEnvTruthy(false) || process.env.IS_DEMO // Skip onboarding in demo mode
   ) {
     return false;
+  }
+  if (shouldUsePlainStartupDialogs()) {
+    logForDebugging('[startup] using plain startup dialogs');
+    const onboardingShown = await runPlainStartupSetup();
+    setSessionTrustAccepted(true);
+    resetGrowthBook();
+    void initializeGrowthBook();
+    void getSystemContext();
+    void updateGithubRepoPathMapping();
+    if (feature('LODESTONE')) {
+      updateDeepLinkTerminalPreference();
+    }
+    applyConfigEnvironmentVariables();
+    void initializeTelemetryAfterTrust();
+    return onboardingShown;
   }
   const config = getGlobalConfig();
   let onboardingShown = false;

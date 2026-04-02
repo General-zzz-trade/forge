@@ -39,7 +39,7 @@ import {
   relative,
   sep,
 } from 'path'
-import picomatch from 'picomatch'
+import picomatch from '../vendor/picomatch.js'
 import { logEvent } from 'src/services/analytics/index.js'
 import {
   getAdditionalInstructionDirectories,

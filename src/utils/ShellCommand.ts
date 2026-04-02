@@ -1,7 +1,7 @@
 import type { ChildProcess } from 'child_process'
 import { stat } from 'fs/promises'
 import type { Readable } from 'stream'
-import treeKill from 'tree-kill'
+import treeKill from '../vendor/treeKill.js'
 import { generateTaskId } from '../Task.js'
 import { formatDuration } from './format.js'
 import {

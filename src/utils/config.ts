@@ -57,6 +57,7 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 // infinite recursion when the config file is corrupted. logEvent's sampling check
 // reads GrowthBook features from the global config, which calls getConfig again.
 let insideGetConfig = false
+const warnedMissingConfigFiles = new Set<string>()
 
 // Image dimension info for coordinate mapping (only set when image was resized)
 export type PastedContent = {
@@ -1551,9 +1552,10 @@ function getConfig<A>(
     const errCode = getErrnoCode(error)
     if (errCode === 'ENOENT') {
       const backupPath = findMostRecentBackup(file)
-      if (backupPath) {
+      if (backupPath && !warnedMissingConfigFiles.has(file)) {
+        warnedMissingConfigFiles.add(file)
         process.stderr.write(
-          `\nClaude configuration file not found at: ${file}\n` +
+          `\nForge configuration file not found at: ${file}\n` +
             `A backup file exists at: ${backupPath}\n` +
             `You can manually restore it by running: cp "${backupPath}" "${file}"\n\n`,
         )

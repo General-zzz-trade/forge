@@ -1,4 +1,11 @@
-import { accessSync, constants, existsSync, readdirSync } from 'fs'
+import {
+  accessSync,
+  constants,
+  existsSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import { homedir, tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -6,6 +13,12 @@ import { dirname, join } from 'path'
 export const FORGE_CONFIG_DIR_ENV = 'FORGE_CONFIG_DIR'
 export const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR'
 export const FORGE_USE_LEGACY_CONFIG_DIR_ENV = 'FORGE_USE_LEGACY_CONFIG_DIR'
+
+export type ConfigHomeDirResolution = {
+  path: string
+  source: 'explicit' | 'default' | 'legacy' | 'fallback'
+  reason: string
+}
 
 export function getDefaultForgeConfigHomeDir(): string {
   return join(homedir(), '.forge').normalize('NFC')
@@ -18,6 +31,12 @@ export function getLegacyClaudeConfigHomeDir(): string {
 function isWritableDirectory(path: string): boolean {
   try {
     accessSync(path, constants.R_OK | constants.W_OK | constants.X_OK)
+    const probePath = join(
+      path,
+      `.forge-write-probe-${process.pid}-${Date.now()}`,
+    )
+    writeFileSync(probePath, '', { mode: 0o600 })
+    unlinkSync(probePath)
     return true
   } catch {
     return false
@@ -27,6 +46,12 @@ function isWritableDirectory(path: string): boolean {
 function canCreateInParent(path: string): boolean {
   try {
     accessSync(dirname(path), constants.W_OK | constants.X_OK)
+    const probePath = join(
+      dirname(path),
+      `.forge-write-probe-${process.pid}-${Date.now()}`,
+    )
+    writeFileSync(probePath, '', { mode: 0o600 })
+    unlinkSync(probePath)
     return true
   } catch {
     return false
@@ -51,11 +76,15 @@ function hasDirectoryEntries(path: string): boolean {
   }
 }
 
-function resolveConfigHomeDir(): string {
+function resolveConfigHomeDir(): ConfigHomeDirResolution {
   const explicitConfigDir =
     process.env[FORGE_CONFIG_DIR_ENV] ?? process.env[CLAUDE_CONFIG_DIR_ENV]
   if (explicitConfigDir) {
-    return explicitConfigDir.normalize('NFC')
+    return {
+      path: explicitConfigDir.normalize('NFC'),
+      source: 'explicit',
+      reason: `using ${FORGE_CONFIG_DIR_ENV}/${CLAUDE_CONFIG_DIR_ENV} override`,
+    }
   }
 
   const forgeConfigDir = getDefaultForgeConfigHomeDir()
@@ -70,23 +99,60 @@ function resolveConfigHomeDir(): string {
   // happens to exist. Otherwise startup keeps inheriting stale plugin state,
   // session metadata, and migration work from old installs.
   if (useLegacyConfigDir && existsSync(legacyConfigDir)) {
-    return legacyConfigDir
+    return {
+      path: legacyConfigDir,
+      source: 'legacy',
+      reason: `using legacy config dir because ${FORGE_USE_LEGACY_CONFIG_DIR_ENV}=1`,
+    }
   }
 
   const forgeExists = existsSync(forgeConfigDir)
-  if (forgeExists && hasDirectoryEntries(forgeConfigDir)) {
-    return forgeConfigDir
+  if (
+    forgeExists &&
+    hasDirectoryEntries(forgeConfigDir) &&
+    isUsableConfigHomeDir(forgeConfigDir)
+  ) {
+    return {
+      path: forgeConfigDir,
+      source: 'default',
+      reason: 'using existing writable ~/.forge directory',
+    }
   }
 
   if (isUsableConfigHomeDir(forgeConfigDir)) {
-    return forgeConfigDir
+    return {
+      path: forgeConfigDir,
+      source: 'default',
+      reason: 'using writable ~/.forge directory',
+    }
+  }
+
+  if (
+    useLegacyConfigDir &&
+    existsSync(legacyConfigDir) &&
+    hasDirectoryEntries(legacyConfigDir) &&
+    isUsableConfigHomeDir(legacyConfigDir)
+  ) {
+    return {
+      path: legacyConfigDir,
+      source: 'legacy',
+      reason: 'using existing writable legacy ~/.claude directory',
+    }
   }
 
   if (useLegacyConfigDir && isUsableConfigHomeDir(legacyConfigDir)) {
-    return legacyConfigDir
+    return {
+      path: legacyConfigDir,
+      source: 'legacy',
+      reason: 'using writable legacy ~/.claude directory',
+    }
   }
 
-  return getFallbackForgeConfigHomeDir()
+  return {
+    path: getFallbackForgeConfigHomeDir(),
+    source: 'fallback',
+    reason: '~/.forge is unavailable or read-only; using writable fallback under tmp',
+  }
 }
 
 export function isUsingDefaultConfigHomeDir(): boolean {
@@ -96,8 +162,14 @@ export function isUsingDefaultConfigHomeDir(): boolean {
 // Memoized: 150+ callers, many on hot paths. Keyed off the explicit config-dir
 // env vars so tests that change them get a fresh value without cache.clear().
 // Filesystem fallback (~/.forge vs ~/.claude) is expected to be process-stable.
+export const getConfigHomeDirResolution = memoize(
+  (): ConfigHomeDirResolution => resolveConfigHomeDir(),
+  () =>
+    `${process.env[FORGE_CONFIG_DIR_ENV] ?? ''}\0${process.env[CLAUDE_CONFIG_DIR_ENV] ?? ''}\0${process.env[FORGE_USE_LEGACY_CONFIG_DIR_ENV] ?? ''}`,
+)
+
 export const getClaudeConfigHomeDir = memoize(
-  (): string => resolveConfigHomeDir(),
+  (): string => getConfigHomeDirResolution().path,
   () =>
     `${process.env[FORGE_CONFIG_DIR_ENV] ?? ''}\0${process.env[CLAUDE_CONFIG_DIR_ENV] ?? ''}\0${process.env[FORGE_USE_LEGACY_CONFIG_DIR_ENV] ?? ''}`,
 )

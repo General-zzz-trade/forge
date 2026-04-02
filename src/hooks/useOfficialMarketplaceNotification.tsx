@@ -4,6 +4,7 @@ import type { Notification } from '../context/notifications.js';
 import { Text } from '../ink.js';
 import { getGlobalClaudeFile } from '../utils/env.js';
 import { logForDebugging } from '../utils/debug.js';
+import { isEnvTruthy } from '../utils/envUtils.js';
 import { checkAndInstallOfficialMarketplace } from '../utils/plugins/officialMarketplaceStartupCheck.js';
 import { useStartupNotification } from './notifs/useStartupNotification.js';
 
@@ -12,6 +13,12 @@ import { useStartupNotification } from './notifs/useStartupNotification.js';
  * notifications for success/failure in the bottom right of the REPL.
  */
 export function useOfficialMarketplaceNotification() {
+  if (!isEnvTruthy(process.env.FORGE_ENABLE_STARTUP_MARKETPLACE_INSTALL)) {
+    logForDebugging(
+      'Official marketplace startup install disabled by default; set FORGE_ENABLE_STARTUP_MARKETPLACE_INSTALL=1 to enable',
+    );
+    return;
+  }
   useStartupNotification(_temp);
 }
 async function _temp() {

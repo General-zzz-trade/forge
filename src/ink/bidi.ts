@@ -14,7 +14,7 @@
  * also lacks bidi. We enable bidi reordering when running on Windows or
  * inside Windows Terminal (covers WSL).
  */
-import bidiFactory from 'bidi-js'
+import bidiFactory from '../vendor/bidi.js'
 
 type ClusteredChar = {
   value: string

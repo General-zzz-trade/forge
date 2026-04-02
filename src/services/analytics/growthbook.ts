@@ -1,4 +1,4 @@
-import { GrowthBook } from '@growthbook/growthbook'
+import { GrowthBook } from '../../vendor/growthbook.js'
 import { isEqual, memoize } from 'lodash-es'
 import {
   getAuthenticatedApiBaseUrl,

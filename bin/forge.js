@@ -5,6 +5,44 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const args = process.argv.slice(2)
+
+function hasHeadlessFlag(argv) {
+  return argv.some(arg =>
+    [
+      '-p',
+      '--print',
+      '--version',
+      '-v',
+      '-V',
+      '--help',
+      '-h',
+      '--init-only',
+      'mcp',
+    ].includes(arg) || arg.startsWith('--sdk-url'),
+  )
+}
+
+function ensureInteractiveTty(argv) {
+  if (hasHeadlessFlag(argv)) {
+    return
+  }
+
+  const hasInputTty = Boolean(process.stdin.isTTY)
+  const hasOutputTty = Boolean(process.stdout.isTTY || process.stderr.isTTY)
+  if (hasInputTty && hasOutputTty) {
+    process.env.FORCE_INTERACTIVE = process.env.FORCE_INTERACTIVE || '1'
+    return
+  }
+
+  console.error(
+    'Forge interactive startup requires a TTY. Run `npm start` in a terminal, or use `forge --print ...` for non-interactive mode.',
+  )
+  process.exit(1)
+}
+
+ensureInteractiveTty(args)
+
 // Re-spawn inside a PTY only when explicitly requested.
 // Auto-promoting a non-TTY launch into an interactive PTY can leave Forge
 // waiting forever in wrappers, CI, IDE launchers, or other piped contexts.
@@ -17,7 +55,6 @@ if (
   !process.env.FORGE_IN_PTY &&
   process.platform !== 'win32'
 ) {
-  const args = process.argv.slice(2)
   const nonInteractiveFlags = ['-p', '--print', '--version', '-v', '-V', 'mcp', '--init-only']
   const isNonInteractive = args.some(a => nonInteractiveFlags.includes(a))
 
@@ -142,7 +179,6 @@ const result = spawnSync(
     'run',
     '--cwd',
     rootDir,
-    '--install=fallback',
     '--define',
     `MACRO=${macro}`,
     'src/entrypoints/cli.tsx',

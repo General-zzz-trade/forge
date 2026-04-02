@@ -42,10 +42,25 @@ function getUltraplanModel(): string {
 // /ultraplan, which is filtered out of headless mode as "Unknown skill"
 //
 // Bundler inlines .txt as a string; the test runner wraps it as {default}.
+// Recovery builds may be missing this asset entirely, so treat it as optional
+// instead of crashing the whole REPL at module-import time.
 /* eslint-disable @typescript-eslint/no-require-imports */
-const _rawPrompt = require('../utils/ultraplan/prompt.txt');
+function loadUltraplanPrompt(): string {
+  try {
+    const mod = require('../utils/ultraplan/prompt.txt');
+    return (typeof mod === 'string' ? mod : mod.default).trimEnd();
+  } catch (error) {
+    logForDebugging(`Ultraplan prompt asset unavailable: ${errorMessage(error)}`);
+    return [
+      '<system-reminder>',
+      'You are preparing a detailed implementation plan for the current task.',
+      'Break the work into concrete steps, call out risks, and keep the plan actionable.',
+      '</system-reminder>',
+    ].join('\n');
+  }
+}
 /* eslint-enable @typescript-eslint/no-require-imports */
-const DEFAULT_INSTRUCTIONS: string = (typeof _rawPrompt === 'string' ? _rawPrompt : _rawPrompt.default).trimEnd();
+const DEFAULT_INSTRUCTIONS: string = loadUltraplanPrompt();
 
 // Dev-only prompt override resolved eagerly at module load.
 // Gated to ant builds (USER_TYPE is a build-time define,
