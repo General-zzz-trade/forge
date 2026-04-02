@@ -4,13 +4,17 @@ import { dirname, join } from 'path'
 import { coerce } from 'semver'
 import { getIsNonInteractiveSession } from '../bootstrap/state.js'
 import { getGlobalConfig, saveGlobalConfig } from './config.js'
-import { getClaudeConfigHomeDir } from './envUtils.js'
+import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { toError } from './errors.js'
 import { logError } from './log.js'
 import { isEssentialTrafficOnly } from './privacyLevel.js'
 import { gt } from './semver.js'
 
 const MAX_RELEASE_NOTES_SHOWN = 5
+const REMOTE_RELEASE_NOTES_ENV_VARS = [
+  'FORGE_ENABLE_REMOTE_RELEASE_NOTES',
+  'CLAUDE_CODE_ENABLE_REMOTE_RELEASE_NOTES',
+] as const
 
 /**
  * We fetch the changelog from GitHub instead of bundling it with the build.
@@ -41,6 +45,12 @@ function getChangelogCachePath(): string {
 // In-memory cache populated by async reads. Sync callers (React render, sync
 // helpers) read from this cache after setup.ts awaits checkForReleaseNotes().
 let changelogMemoryCache: string | null = null
+
+export function isRemoteReleaseNotesFetchEnabled(): boolean {
+  return REMOTE_RELEASE_NOTES_ENV_VARS.some(envVar =>
+    isEnvTruthy(process.env[envVar]),
+  )
+}
 
 /** @internal exported for tests */
 export function _resetChangelogCacheForTesting(): void {
@@ -82,6 +92,10 @@ export async function migrateChangelogFromConfig(): Promise<void> {
 export async function fetchAndStoreChangelog(): Promise<void> {
   // Skip in noninteractive mode
   if (getIsNonInteractiveSession()) {
+    return
+  }
+
+  if (!isRemoteReleaseNotesFetchEnabled()) {
     return
   }
 
@@ -278,7 +292,6 @@ export function getAllReleaseNotes(
 /**
  * Checks if there are release notes to show based on the last seen version.
  * Can be used by multiple components to determine whether to display release notes.
- * Also triggers a fetch of the latest changelog if the version has changed.
  *
  * @param lastSeenVersion The last version of release notes the user has seen
  * @param currentVersion The current application version, defaults to MACRO.VERSION
@@ -306,12 +319,6 @@ export async function checkForReleaseNotes(
 
   // Ensure the in-memory cache is populated for subsequent sync reads
   const cachedChangelog = await getStoredChangelog()
-
-  // If the version has changed or we don't have a cached changelog, fetch a new one
-  // This happens in the background and doesn't block the UI
-  if (lastSeenVersion !== currentVersion || !cachedChangelog) {
-    fetchAndStoreChangelog().catch(error => logError(toError(error)))
-  }
 
   const releaseNotes = getRecentReleaseNotes(
     currentVersion,
